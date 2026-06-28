@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Logs
+*.log
+logs/
+
+# Local data, models, and experiment outputs
+/data/
+/datasets/
+/checkpoints/
+/outputs/
+/runs/
+/wandb/
+/autodl-tmp/
+
+# Large model artifacts
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.parquet
+*.arrow
+
+# Keep README figures, but ignore generated eval dumps by default.
+docs/**/*.json
+docs/**/*.csv

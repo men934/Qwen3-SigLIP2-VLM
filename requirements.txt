@@ -1,0 +1,8 @@
+torch
+transformers
+peft
+pillow
+matplotlib
+numpy
+pyarrow
+tqdm
