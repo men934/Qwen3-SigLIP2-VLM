@@ -252,7 +252,7 @@ qwen3_siglip2_vlm/
 └── README.md
 ```
 
-## Installation
+## 安装与环境
 
 ```bash
 git clone https://github.com/men934/Qwen3-SigLIP2-VLM.git
@@ -263,13 +263,13 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Set `PYTHONPATH`:
+设置 `PYTHONPATH`，让 Python 能找到 `src/vlm` 下的项目代码：
 
 ```bash
 export PYTHONPATH=$PWD/src:$PYTHONPATH
 ```
 
-The scripts assume local model/data paths under `/root/autodl-tmp` by default. Override them with environment variables:
+训练脚本默认假设模型、数据集和 checkpoint 位于 `/root/autodl-tmp` 下。如果你的路径不同，可以通过环境变量覆盖：
 
 ```bash
 QWEN_PATH=/path/to/Qwen3-1.7B \
@@ -278,50 +278,50 @@ OUTPUT_DIR=/path/to/checkpoints/stage1 \
 bash scripts/train_stage1.sh
 ```
 
-## Data
+## 数据说明
 
-The repository does not include datasets or model weights. The experiments used:
+仓库不包含数据集和模型权重，只保留代码、README 和实验图表。本文实验使用的数据如下：
 
-| Stage | Data |
+| 阶段 | 数据 |
 |---|---|
 | Stage1 | LLaVA-Pretrain / LLaVA-CC3M-Pretrain + COCO train2014 |
 | Stage2 | LLaVA-1.5 instruction data + ShareGPT4V/MMInstruct subsets |
 | Stage3 | DocVQA, TextVQA, ChartQA, CORD/FUNSD/SROIE-style document data |
 | Stage4 | Amazon Berkeley Objects derived e-commerce image-text tasks |
 
-## Example Commands
+## 常用命令
 
-Stage1:
+Stage1 视觉语言对齐：
 
 ```bash
 bash scripts/train_stage1.sh
 ```
 
-Stage2:
+Stage2 通用多模态指令微调：
 
 ```bash
 bash scripts/train_stage2.sh
 ```
 
-Stage3:
+Stage3 文档 / OCR / 图表垂域微调：
 
 ```bash
 bash scripts/train_stage3.sh
 ```
 
-Stage4 SFT:
+Stage4 电商垂域 SFT：
 
 ```bash
 bash scripts/train_stage4_sft.sh
 ```
 
-Stage4 GRPO:
+Stage4 电商垂域 GRPO：
 
 ```bash
 bash scripts/train_stage4_grpo.sh
 ```
 
-Stage4 evaluation:
+Stage4 电商垂域评估：
 
 ```bash
 PYTHONPATH=src python -m vlm.eval.eval_stage4_ecommerce \
@@ -331,14 +331,10 @@ PYTHONPATH=src python -m vlm.eval.eval_stage4_ecommerce \
   --max-new-tokens 64
 ```
 
-## Notes and Limitations
+## 说明与局限
 
-- This is a learning-oriented VLM project. The code emphasizes clarity and reproducibility over maximum training efficiency.
-- Current GRPO implementation is online single-update GRPO. It uses `current_logps.detach()` as the old-policy snapshot for each sampled group, so it is closer to online GRPO than multi-epoch PPO replay.
-- The dynamic-resolution + SigLIP2 Q/K 2D RoPE branch is useful as an architecture experiment, but it did not dominate all downstream metrics in the current runs.
-- Stage4 GRPO improved generation F1 and selected tasks, but reward design remains the main bottleneck for style/title tasks.
-- Model weights and datasets are intentionally excluded from GitHub. Use `.gitignore` to avoid committing large artifacts.
-
-## Acknowledgements
-
-This project is inspired by the open-source VLM training style of projects such as [MonetVLM](https://github.com/v0yager33/MonetVLM), LLaVA-style staged alignment/instruction tuning, Qwen-VL/Qwen2.5-VL design ideas, SigLIP/SigLIP2 vision encoders, and recent GRPO-style preference optimization recipes.
+- 这是一个偏学习和工程复现导向的 VLM 项目。代码更重视链路清晰、注释完整和实验可复现，而不是极致训练效率。
+- 当前 GRPO 实现是在线单次更新版本。代码中用 `current_logps.detach()` 作为当前采样组的 old-policy 快照，因此它更接近 online GRPO，而不是多轮 replay 的 PPO。
+- 动态分辨率 + SigLIP2 Q/K 2D RoPE 是一个有价值的架构实验，但在当前实验中并没有稳定超过固定分辨率分支。
+- Stage4 GRPO short reward v2 提升了整体 F1、generation F1、属性总结和颜色问答，但 `product_style_qa` 和 `product_title_generation` 仍然受 reward 设计影响较大。
+- 模型权重、原始数据集和 checkpoint 不放在 GitHub 中，避免仓库过大；相关路径通过环境变量传入。
