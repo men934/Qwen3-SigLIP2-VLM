@@ -4,6 +4,8 @@
 
 这个项目的目标不是直接复刻一个大规模商业 VLM，而是把一个 VLM 从数据、模型、训练脚本、评估脚本到 GRPO ablation 的核心链路跑通。代码尽量保持脚本化、模块化和中文注释，适合学习、复现实验和作为多模态方向的工程项目展示。
 
+![Qwen3-SigLIP2-VLM project overview](docs/assets/project_hero.png)
+
 ## Highlights
 
 - **Qwen3-1.7B + SigLIP2 SO400M 架构**：使用独立视觉编码器、2x2 Patch Merger 和两层 MLP Projector 拼接视觉/文本 token。
@@ -45,6 +47,10 @@ visual tokens + text tokens
 | Collator | `src/vlm/data/collator.py` | 构造 input_ids、labels、pixel_values 和 image metadata |
 
 ## Training Pipeline
+
+下图概括了本项目从输入数据、模型结构、四阶段训练到最终评估结论的完整流程：
+
+![Qwen3-SigLIP2-VLM multi-stage training pipeline](docs/assets/training_pipeline_overview.png)
 
 ### Stage 1: Visual-Language Alignment
 
