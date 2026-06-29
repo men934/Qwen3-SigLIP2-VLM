@@ -1,17 +1,4 @@
-"""构建 Stage 4 电商 SFT 的均衡子集。
-
-为什么需要这个脚本？
-    ABO metadata 里不同任务的样本数不完全均衡，例如 style 任务明显少于
-    brand/type/title/summary。如果直接取 train.json 前 100k，模型会更多看到大类
-    任务，小类任务提升可能不明显。
-
-这个脚本按 ``task`` 分桶，然后从每个任务里随机抽取接近相同数量的样本，生成一个
-新的 JSON。这样 100k 训练更适合做阶段性实验：
-
-    - 训练时间比 717k 全量短很多。
-    - 每个任务都有足够曝光。
-    - 评估结果更容易解释。
-"""
+"""Build a task-balanced Stage 4 e-commerce SFT subset."""
 
 from __future__ import annotations
 
@@ -57,11 +44,7 @@ def build_balanced_subset(
     num_samples: int,
     seed: int,
 ) -> list[dict[str, Any]]:
-    """按 task 均衡抽样。
-
-    如果某个任务样本不足，就先全部取出，再把剩余额度分配给其它任务。本项目的 ABO
-    数据里每个任务都超过 16k，所以 100k 六任务均衡抽样不会触发不足逻辑。
-    """
+    """Sample examples by task with near-equal quotas."""
 
     if num_samples <= 0:
         raise ValueError(f"num_samples 必须为正数，当前为 {num_samples}。")

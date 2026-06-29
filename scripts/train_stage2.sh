@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 2 多模态指令微调启动脚本。
 #
-# 这个脚本用于训练：
+# 训练结构：
 #   SigLIP2 -> PatchMerger -> Projector -> Qwen3
 #
 # 默认策略：
@@ -34,7 +34,7 @@ STAGE1_VISION_PATH="${STAGE1_VISION_PATH:-}"
 # 输出路径
 OUTPUT_DIR="${OUTPUT_DIR:-/root/autodl-tmp/checkpoints/stage2_llava_instruct}"
 
-# 训练规模。默认是小规模 sanity training。
+# 训练规模。
 MAX_SAMPLES="${MAX_SAMPLES:-1024}"
 MAX_STEPS="${MAX_STEPS:-100}"
 NUM_EPOCHS="${NUM_EPOCHS:-1}"
@@ -59,7 +59,7 @@ LR="${LR:-2e-4}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-0.0}"
 MAX_GRAD_NORM="${MAX_GRAD_NORM:-1.0}"
 
-# LoRA 参数。当前环境未安装 peft 时不要打开 USE_LORA。
+# LoRA 参数。
 USE_LORA="${USE_LORA:-0}"
 LORA_R="${LORA_R:-16}"
 LORA_ALPHA="${LORA_ALPHA:-32}"

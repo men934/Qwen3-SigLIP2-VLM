@@ -1,6 +1,6 @@
-"""Stage 3 垂域测试集定量评估脚本。
+"""Stage 3 domain quantitative evaluation.
 
-这个脚本评估的是“开放式生成回答”，不是分类准确率。不同任务使用不同指标：
+不同任务使用不同指标：
 
     VQA / OCR:
         normalized exact match + token F1
@@ -8,18 +8,12 @@
     ChartQA:
         在 VQA 指标基础上，额外计算 relaxed accuracy。数字答案允许 5% 相对误差。
 
-    CORD JSON:
-        JSON parse rate + 扁平字段 token F1。这里不是严格结构化评测的最终版本，
-        但足够作为 Stage 3 训练前后的工程对比。
-
 默认会尝试比较：
     1. Stage1 固定分辨率
     2. Stage1 动态分辨率 + SigLIP Q/K 2D RoPE
     3. Stage2 固定分辨率 LoRA
     4. Stage2 动态分辨率 + SigLIP Q/K 2D RoPE LoRA
-    5. Stage3 当前 checkpoint
-
-如果某个 checkpoint 不存在，会自动跳过。
+    5. Stage3 checkpoint
 """
 
 from __future__ import annotations
@@ -166,7 +160,7 @@ def best_stage3_checkpoint(root: str | Path) -> Path | None:
 
 
 def default_checkpoint_specs(args: argparse.Namespace) -> list[CheckpointSpec]:
-    """构造默认对比列表，不存在的 checkpoint 后面会跳过。"""
+    """Build default checkpoint comparison list."""
 
     stage3_dir = (
         Path(args.stage3_checkpoint)

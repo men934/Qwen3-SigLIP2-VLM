@@ -40,7 +40,7 @@ GRAD_ACCUM="${GRAD_ACCUM:-8}"
 MAX_LENGTH="${MAX_LENGTH:-1024}"
 IMAGE_SIZE="${IMAGE_SIZE:-384}"
 
-# Stage 3 主线沿用固定分辨率，方便直接继承 Stage 2 固定 baseline。
+# Stage 3 主线沿用固定分辨率，直接继承 Stage 2 fixed baseline。
 DYNAMIC_RESOLUTION="${DYNAMIC_RESOLUTION:-0}"
 MIN_PIXELS="${MIN_PIXELS:-147456}"   # 384 * 384
 MAX_PIXELS="${MAX_PIXELS:-451584}"   # 672 * 672

@@ -1,10 +1,6 @@
-"""为 LLaVA-Pretrain 生成固定 train/val 划分。
+"""Create a fixed train/val split for LLaVA-Pretrain.
 
-Stage 1 的 LLaVA-Pretrain 原始 JSON 没有自带 train/val/test 划分。
-为了观察 projector 是否真的泛化，而不是只看 train loss，我们需要固定随机划分出
-一个验证集。
-
-推荐用法：
+Usage:
 
     python tools/split_llava_pretrain.py \
       --input /root/autodl-tmp/hf_datasets/LLaVA-Pretrain/blip_laion_cc_sbu_558k.json \

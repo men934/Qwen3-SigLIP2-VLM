@@ -1,11 +1,4 @@
-"""Stage 3 垂域混合数据集读取脚本。
-
-Stage 3 的原始数据来自多个公开数据集：
-
-    DocVQA / InfographicVQA / TextVQA / ChartQA / CORD / FUNSD
-
-这些数据集的字段命名、图片存储方式、答案格式都不一样。为了让训练脚本保持简单，
-我们先用 ``build_stage3_domain_mix.py`` 做一次离线转换，生成统一 JSON：
+"""Stage 3 domain-mix dataset reader.
 
     {
       "id": "docvqa_train_00000001",
@@ -19,9 +12,6 @@ Stage 3 的原始数据来自多个公开数据集：
       "answers": ["answer", "..."],
       "eval": {"metric": "vqa"}
     }
-
-这个 Dataset 只负责读取统一 JSON 和做轻量校验。图片读取、tokenize、label mask 仍然交给
-``VLMDataCollator``，这样 Stage 2 和 Stage 3 的训练路径可以共用同一套 batch 格式。
 """
 
 from __future__ import annotations
@@ -45,7 +35,7 @@ class DomainMixDataset(Dataset):
             可以先关闭；做数据检查时建议打开。
 
         max_samples:
-            可选，只取前 N 条，方便快速验证训练脚本和评估脚本。
+            可选，只取前 N 条。
     """
 
     def __init__(
@@ -128,7 +118,7 @@ class DomainMixDataset(Dataset):
 
 
 if __name__ == "__main__":
-    # 临时 sanity check，方便直接检查构建后的 JSON。
+    # Quick dataset read check.
     default_path = Path("/root/autodl-tmp/hf_datasets/domain_mix/stage3_mix/train.json")
     dataset = DomainMixDataset(default_path, verify_images=True, max_samples=3)
     print("样本数:", len(dataset))

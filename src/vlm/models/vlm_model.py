@@ -1,6 +1,4 @@
-"""SigLIP2 + PatchMerger + Projector + Qwen3 的最小 VLM 主模型。
-
-这个文件把前面已经写好的几个组件串起来：
+"""SigLIP2 + PatchMerger + Projector + Qwen3 VLM.
 
     pixel_values
         -> SigLIP2 vision tower
@@ -13,16 +11,6 @@
         -> 替换文本中的 <image> token
         -> Qwen3ForCausalLM
         -> loss / logits
-
-第一版目标：
-    跑通 Stage 1 视觉-语言对齐训练的 forward + loss。
-
-暂时不做：
-    1. generation / chat
-    2. LoRA
-    3. 多图输入
-
-这些功能后面会逐步加，不应该一开始全塞进主模型。
 """
 
 from __future__ import annotations
@@ -37,7 +25,7 @@ from torch import Tensor, nn
 try:
     from .patch_merger import GridSize, PatchMerger
     from .projector import MLPProjector
-except ImportError:  # 允许直接 python src/vlm/models/vlm_model.py 运行 sanity check
+except ImportError:  # 允许直接 python src/vlm/models/vlm_model.py 运行
     from patch_merger import GridSize, PatchMerger
     from projector import MLPProjector
 
@@ -70,21 +58,7 @@ class VLMModelConfig:
 
 
 class QwenSiglipVLM(nn.Module):
-    """一个最小可训练的 SigLIP2 + Qwen3 VLM。
-
-    训练阶段建议：
-        Stage 1:
-            freeze_vision_encoder=True
-            freeze_language_model=True
-            只训练 PatchMerger + Projector
-
-        Stage 2:
-            freeze_vision_encoder=True
-            language_model 接 LoRA
-            Projector 继续训练或小学习率训练
-
-    当前这个类先实现 Stage 1 所需的完整 forward。
-    """
+    """Trainable SigLIP2 + Qwen3 VLM wrapper."""
 
     def __init__(self, config: VLMModelConfig) -> None:
         super().__init__()
@@ -97,7 +71,7 @@ class QwenSiglipVLM(nn.Module):
         if config.use_siglip_qk_2d_rope:
             self._patch_siglip_attention_for_2d_rope()
 
-        # 当前使用 SigLIP2 patch14-384。384/14 会得到 27x27 patch grid。
+        # SigLIP2 patch14-384 produces a 27x27 patch grid.
         # 27 不能被 2 整除，所以 2x2 merge 时需要裁掉最后一行和最后一列：
         #   27x27 -> 26x26 -> 13x13 merged tokens
         self.patch_merger = PatchMerger(
@@ -162,17 +136,10 @@ class QwenSiglipVLM(nn.Module):
         )
 
     def _patch_siglip_attention_for_2d_rope(self) -> None:
-        """把 SigLIP2 每一层 self-attention 替换成支持 2D Q/K RoPE 的 forward。
+        """Patch SigLIP2 attention to apply 2D RoPE on Q/K.
 
-        为什么这里用实例级 monkey patch，而不是改 transformers 源码？
-            1. 不污染全局环境，只有当前 ``QwenSiglipVLM`` 实例会启用这条路径。
-            2. 旧的固定 384 checkpoint 和默认 forward 不受影响。
-            3. 后面如果要升级 transformers，回滚成本比较低。
-
-        注意：
-            这一步只替换 attention 的计算方式，不改变 q/k/v/out projection 权重。
-            原始 SigLIP2 的权重仍然可以加载，但因为我们去掉了 absolute position
-            embedding，视觉塔的输入分布会发生变化，必须重新做 VLM 对齐训练。
+        Only the attention computation changes; q/k/v/out projection weights
+        are unchanged.
         """
 
         outer_model = self
@@ -232,17 +199,7 @@ class QwenSiglipVLM(nn.Module):
             layer.self_attn.forward = MethodType(forward_with_2d_rope, layer.self_attn)
 
     def _resize_language_embeddings_if_needed(self, tokenizer_length: int) -> None:
-        """如果 tokenizer 新增了 <image> token，就扩展 Qwen embedding 表。
-
-        collator.py 会把 ``<image>`` 添加成 additional special token。
-        如果 tokenizer 变长，而模型 embedding 没变长，forward 时遇到 image_token_id
-        会直接越界。因此模型初始化时必须检查并 resize。
-
-        注意：
-            Qwen3 的 config.vocab_size 可能大于 tokenizer 的实际长度，这是正常的。
-            所以不能因为 ``tokenizer_length < embedding_size`` 就报错。真正需要关心的是
-            ``image_token_id`` 是否落在 embedding 表范围内。
-        """
+        """Resize Qwen embeddings when the added image token exceeds the table."""
 
         current_size = self.language_model.get_input_embeddings().num_embeddings
         required_size = max(tokenizer_length, self.image_token_id + 1)
@@ -356,18 +313,7 @@ class QwenSiglipVLM(nn.Module):
         return num_current_positions != num_pretrained_positions
 
     def _encode_with_siglip(self, pixel_values: Tensor, full_grid: GridSize) -> Tensor:
-        """运行 SigLIP2 vision tower，并按配置选择视觉位置编码方式。
-
-        当前支持两条路径：
-
-            1. ``use_siglip_abs_pos_embedding=True``
-               使用 SigLIP2 原生 absolute position embedding。动态尺寸时会使用
-               transformers 内置的 position interpolation。
-
-            2. ``use_siglip_abs_pos_embedding=False`` 且 ``use_siglip_qk_2d_rope=True``
-               完全跳过 SigLIP2 的 absolute position embedding，只做 patch embedding，
-               然后在 SigLIP2 每一层 attention 的 Q/K 上施加 2D RoPE。
-        """
+        """Run SigLIP2 with absolute position embedding or Q/K 2D RoPE."""
 
         if self.config.use_siglip_abs_pos_embedding:
             interpolate_pos_encoding = self._needs_siglip_position_interpolation(full_grid)
@@ -386,9 +332,7 @@ class QwenSiglipVLM(nn.Module):
         embeddings = self.vision_encoder.embeddings
         target_dtype = embeddings.patch_embedding.weight.dtype
 
-        # 这里故意不调用 ``self.vision_encoder.embeddings(pixel_values)``。
-        # 原因是 Hugging Face 的 SigLIP embeddings.forward 会强制加 absolute
-        # position embedding；我们现在要去掉它，改为 attention Q/K 上的 2D RoPE。
+        # Avoid embeddings.forward because it always adds absolute position embedding.
         patch_embeds = embeddings.patch_embedding(pixel_values.to(dtype=target_dtype))
         hidden_states = patch_embeds.flatten(2).transpose(1, 2)
 
@@ -411,12 +355,7 @@ class QwenSiglipVLM(nn.Module):
         full_grid: GridSize,
         image_infos: Optional[list[Any]],
     ) -> list[tuple[Tensor, GridSize]]:
-        """把 SigLIP 输出裁成每张图真实的 patch grid。
-
-        动态分辨率 batch 会把图片 padding 到同一个 H/W。SigLIP 会对 padding 区域也
-        产生 patch token，但这些 token 不代表真实图像内容，所以要根据
-        ``image_infos`` 中的真实 grid 裁掉。
-        """
+        """Crop SigLIP patch tokens back to each image's real patch grid."""
 
         if patch_tokens.ndim != 3:
             raise ValueError(
@@ -528,20 +467,7 @@ class QwenSiglipVLM(nn.Module):
         base: float,
         rope_dim: Optional[int],
     ) -> Tensor:
-        """对 attention 中的 Q/K 张量施加二维 RoPE。
-
-        Args:
-            states:
-                shape 为 ``[B, num_heads, N, head_dim]`` 的 Q 或 K。
-
-            row_positions/col_positions:
-                shape 为 ``[N]`` 的二维坐标。由于 patch token 的 flatten 顺序是
-                row-major，所以第 ``i`` 个 token 的坐标来自同样顺序的 row/col 网格。
-
-        维度分配：
-            ``head_dim`` 的前 ``rope_dim`` 维参与 RoPE，其中前一半给 row，后一半给
-            col。剩余维度原样保留。
-        """
+        """Apply 2D RoPE to Q/K states shaped ``[B, heads, N, head_dim]``."""
 
         if states.ndim != 4:
             raise ValueError(
@@ -633,20 +559,7 @@ class QwenSiglipVLM(nn.Module):
         labels: Optional[Tensor],
         visual_embeds: Tensor | list[Tensor],
     ) -> dict[str, Tensor]:
-        """把文本中的单个 ``<image>`` token 替换成多个 visual embeddings。
-
-        collator 输出的文本序列里，每条样本恰好有一个 ``<image>`` token。
-        这里做的事情是：
-
-            before_text + <image> + after_text
-
-        替换成：
-
-            before_text + visual_tokens + after_text
-
-        因为 visual_tokens 通常有 169 个左右，所以序列长度会变长。
-        对应地，attention_mask 和 labels 也要同步扩展。
-        """
+        """Replace one ``<image>`` token with projected visual embeddings."""
 
         batch_size = input_ids.shape[0]
         text_embeds = self.language_model.get_input_embeddings()(input_ids)
@@ -825,15 +738,7 @@ class QwenSiglipVLM(nn.Module):
 
 
 if __name__ == "__main__":
-    # 临时 sanity check，方便学习和调试。
-    #
-    # 这里会真的加载 Qwen3-1.7B 和 SigLIP2 SO400M，在 CPU 上可能需要一些时间。
-    # 这个检查只取 1 条样本，目标是确认：
-    #   1. collator 输出能喂给模型
-    #   2. SigLIP2 能输出 patch tokens
-    #   3. PatchMerger + Projector 能产生 visual embeddings
-    #   4. <image> token 能被替换成 visual embeddings
-    #   5. Qwen 能计算 loss
+    # Quick end-to-end forward check. This loads local Qwen and SigLIP weights.
     try:
         from vlm.data.collator import CollatorConfig, VLMDataCollator
         from vlm.data.llava_pretrain_dataset import LlavaPretrainDataset
@@ -887,4 +792,4 @@ if __name__ == "__main__":
     print("visual_token_count:", outputs["visual_token_count"])
     print("expanded_attention_mask shape:", tuple(outputs["expanded_attention_mask"].shape))
     print("expanded_labels shape:", tuple(outputs["expanded_labels"].shape))
-    print("\nQwenSiglipVLM sanity check 通过。")
+    print("\nQwenSiglipVLM quick check passed.")

@@ -1,23 +1,21 @@
 # Qwen3-SigLIP2-VLM
 
-这个仓库实现了一套基于 **Qwen3-1.7B** 和 **SigLIP2 SO400M** 的 VLM 训练流程。模型侧使用 Patch Merger + MLP Projector 将视觉 token 映射到 Qwen 的语言空间；训练侧覆盖 Stage1 视觉语言对齐、Stage2 通用指令微调、Stage3 文档/OCR/图表垂域微调，以及 Stage4 电商垂域 SFT + GRPO。
+基于 **Qwen3-1.7B** 和 **SigLIP2 SO400M** 的轻量 VLM 训练项目。模型使用 SigLIP2 提取视觉特征，通过 2x2 Patch Merger 和两层 MLP Projector 将视觉 token 映射到 Qwen hidden space，再把视觉 token 插入文本序列后送入 Qwen 做自回归训练和生成。
 
-我主要关注两件事：一是把 VLM 的数据处理、视觉 token 插入、LoRA 训练、评估脚本串起来；二是在一个可控的电商任务上尝试 SFT 之后的规则奖励优化，观察 GRPO 在短答案和生成类任务上的实际表现。
+仓库覆盖四个阶段：Stage1 视觉语言对齐、Stage2 通用多模态指令微调、Stage3 文档/OCR/图表垂域 SFT、Stage4 电商垂域 SFT 与 GRPO-style reward optimization。
 
 ![Qwen3-SigLIP2-VLM project overview](docs/assets/project_hero.png)
 
 ## 主要实现
 
-- **Qwen3-1.7B + SigLIP2 SO400M**：独立视觉编码器，2x2 Patch Merger，两层 MLP Projector，最后将视觉 token 和文本 token 一起送入 Qwen。
-- **动态分辨率图像处理**：按图像长宽比选择 patch-aligned 分辨率，在 batch 内做 padding。
-- **SigLIP2 内部 2D RoPE**：把 2D visual RoPE 加到 SigLIP attention 的 Q/K 上，用来对比固定分辨率分支。
-- **四阶段训练**：Stage1 对齐、Stage2 instruction tuning、Stage3 文档/OCR/ChartQA 混合垂域、Stage4 ABO 电商垂域。
-- **LoRA + GRPO**：在线采样 G 个回复，做组内 advantage 标准化，加入 KL penalty、early stopping 和任务自适应 reward。
-- **训练与评估记录**：训练脚本保存 `metrics.csv` 和 loss/reward 曲线；评估脚本保存 Markdown 结果和指标图，方便回看不同 checkpoint 的变化。
+- **VLM 结构**：SigLIP2 vision encoder + 2x2 Patch Merger + MLP Projector + Qwen3 CausalLM。
+- **视觉 token 插入**：collator 保留单个 `<image>` token，模型 forward 中将其替换为多枚 projected visual tokens，并同步扩展 attention mask 与 labels。
+- **动态分辨率分支**：图像尺寸按 `patch_size * merge_size` 对齐，batch 内 padding 后再根据真实 patch grid 裁掉 padding token。
+- **SigLIP2 Q/K 2D RoPE 实验**：在 SigLIP attention 的 Q/K 上加入二维 RoPE，用于和固定分辨率 + absolute position embedding 分支对比。
+- **LoRA 微调链路**：Stage2/3/4 复用 projector checkpoint，并在 Qwen 上加载、继续训练 LoRA adapter。
+- **电商 GRPO-style 实验**：基于 ABO 商品图任务实现在线采样、组内 advantage 标准化、KL penalty、early stopping 和任务自适应 reward。
 
 ## Model Design
-
-整体结构：
 
 ```text
 image
@@ -40,21 +38,19 @@ visual tokens + text tokens
 
 | Module | File | Description |
 |---|---|---|
-| Patch Merger | `src/vlm/models/patch_merger.py` | 将相邻 2x2 patch token 合并，降低视觉 token 数量 |
+| Patch Merger | `src/vlm/models/patch_merger.py` | 将相邻 2x2 patch token concat，降低视觉 token 数量 |
 | Projector | `src/vlm/models/projector.py` | 两层 MLP，将 SigLIP hidden size 映射到 Qwen hidden size |
-| VLM Model | `src/vlm/models/vlm_model.py` | 负责视觉编码、视觉 token 插入、语言模型 forward/generation |
-| Dynamic Image Processor | `src/vlm/data/image_processing.py` | 动态分辨率、patch 对齐、batch padding |
-| Collator | `src/vlm/data/collator.py` | 构造 input_ids、labels、pixel_values 和 image metadata |
+| VLM Model | `src/vlm/models/vlm_model.py` | 视觉编码、视觉 token 插入、语言模型 forward/generation |
+| Image Processor | `src/vlm/data/image_processing.py` | 固定/动态分辨率图像预处理、patch grid 记录、batch padding |
+| Collator | `src/vlm/data/collator.py` | 构造 `input_ids`、`labels`、`pixel_values` 和图像元信息 |
 
 ## Training Pipeline
-
-下图是当前仓库里的训练流程和评估产物：
 
 ![Qwen3-SigLIP2-VLM multi-stage training pipeline](docs/assets/training_pipeline_overview.png)
 
 ### Stage 1: Visual-Language Alignment
 
-先训练 Patch Merger / Projector，让视觉 token 能接到 Qwen 的语言空间。默认冻结大部分 backbone，后续实验里再尝试解冻 SigLIP 最后几层。
+冻结 SigLIP2 和 Qwen3，训练 Patch Merger / Projector，使视觉 token 能接入 Qwen 的 hidden space。
 
 数据：
 
@@ -69,7 +65,7 @@ bash scripts/train_stage1.sh
 
 ### Stage 2: General Multimodal Instruction Tuning
 
-在 Stage1 的基础上加入通用视觉指令数据，通过 LoRA 调整 Qwen 的回答格式和多模态问答能力。
+从 Stage1 projector 初始化，加入通用视觉指令数据。主线实验使用 Qwen LoRA，并继续训练 projector。
 
 数据：
 
@@ -85,7 +81,7 @@ bash scripts/train_stage2.sh
 
 ### Stage 3: Document / OCR / Chart Domain SFT
 
-从 Stage2 LoRA checkpoint 初始化，继续训练文档理解、OCR 和图表问答数据。
+从 Stage2 projector + LoRA checkpoint 初始化，继续训练文档理解、OCR 和图表问答数据。
 
 数据混合：
 
@@ -93,7 +89,7 @@ bash scripts/train_stage2.sh
 - TextVQA
 - ChartQA
 - CORD
-- FUNSD / SROIE style structured extraction data
+- FUNSD / SROIE-style structured extraction data
 
 入口：
 
@@ -101,7 +97,7 @@ bash scripts/train_stage2.sh
 bash scripts/train_stage3.sh
 ```
 
-在 300 样本快速评估上，Stage3 相比前两阶段有明显提升：
+300 样本评估结果：
 
 | Checkpoint | EM | F1 | Chart Relaxed |
 |---|---:|---:|---:|
@@ -115,7 +111,7 @@ bash scripts/train_stage3.sh
 
 ### Stage 4: E-commerce Domain SFT
 
-Stage4 使用 Amazon Berkeley Objects 相关数据构造电商商品图问答任务，包括品牌、颜色、类型、风格、标题生成和属性总结。
+Stage4 使用 Amazon Berkeley Objects 构造商品图问答任务，包括品牌、颜色、类型、风格、标题生成和属性总结。
 
 任务类型：
 
@@ -132,37 +128,46 @@ Stage4 使用 Amazon Berkeley Objects 相关数据构造电商商品图问答任
 bash scripts/train_stage4_sft.sh
 ```
 
-100k balanced SFT 的验证 loss 下降如下：
+100k balanced SFT 的验证 loss：
 
 ![Stage4 SFT loss](docs/assets/stage4_sft_loss_curve.png)
 
-## GRPO Experiments
+## GRPO-style Reward Optimization
 
-Stage4 SFT 之后，我写了一个面向电商垂域的在线 GRPO 训练脚本：
+Stage4 SFT 之后，仓库实现了一个电商垂域的在线 GRPO-style 训练脚本：
 
 ```bash
 bash scripts/train_stage4_grpo.sh
 ```
 
-实现方式：
+训练流程：
 
 ```text
 1. 对每个 prompt 采样 G 个回复
-2. 使用任务自适应 reward 计算每个回复的奖励 R_i
-3. 在同一 prompt 的 G 个回复内部做标准化
+2. 使用任务自适应规则 reward 计算奖励 R_i
+3. 在同一 prompt 的 G 个回复内部做 advantage 标准化
    A_i = (R_i - mean(R)) / (std(R) + eps)
-4. 对 advantage 做裁剪
+4. 裁剪 advantage
 5. 计算 policy logprob 与 reference logprob
 6. 使用 clipped surrogate + KL penalty 更新 LoRA
 ```
 
-README 中保留了三组 GRPO 对比：
+实现边界：
+
+- 这是 **online single-update GRPO-style trainer**，不是完整 PPO/GRPO replay trainer。
+- 每组回复只更新一次；`old_logps` 使用 `current_logps.detach()` 作为采样时 policy 的快照。
+- loss 使用 sequence-level average logprob，不是逐 token 的多轮 RLHF objective。
+- 默认 `prompt_batch_size=1`，每个 optimizer step 处理一个 prompt 和 `NUM_GENERATIONS` 个回复。
+- 默认只训练 Qwen LoRA，冻结 SigLIP2、Qwen backbone 和 projector。
+- reward 是任务规则函数，适合 brand/type/color/style 等短答案任务，以及 title/summary 的 token F1 shaping。
+
+GRPO 对比实验：
 
 | Run | Main Setting | Observation |
 |---|---|---|
 | GRPO 300-step | short-answer reward | generation F1 提升，但整体 EM/F1 下降 |
 | GRPO 20k | long run, `NUM_GENERATIONS=4` | validation reward 变高，但真实评估整体退化，出现 reward hacking |
-| GRPO short reward v2 | short run + stronger KL + early stopping + task-adaptive reward | 整体 F1 小幅超过 SFT，generation F1 明显优于 SFT |
+| GRPO short reward v2 | short run + stronger KL + early stopping + task-adaptive reward | 整体 F1 小幅超过 SFT，generation F1 高于 SFT |
 
 GRPO short reward v2 使用：
 
@@ -211,16 +216,22 @@ Stage4 电商 300 样本评估结果：
 
 ![Stage4 by-task F1](docs/assets/stage4_by_task_f1.png)
 
-目前结论：
+结论：
 
-- 如果追求整体稳定性，Stage4 SFT 100k balanced 仍是最稳 checkpoint。
-- GRPO short reward v2 避免了 20k 长跑里的退化，整体 F1 从 0.6593 到 0.6609，generation F1 从 0.5422 到 0.5528。
-- GRPO 仍然需要更细的 reward engineering，尤其是 `product_style_qa` 和 `product_title_generation`。
+- Stage4 SFT 100k balanced 是整体最稳的 checkpoint。
+- GRPO short reward v2 将整体 F1 从 0.6593 提升到 0.6609，generation F1 从 0.5422 提升到 0.5528。
+- `product_style_qa` 和 `product_title_generation` 仍受 reward 设计影响较大。
 
 ## Repository Structure
 
 ```text
 qwen3_siglip2_vlm/
+├── configs/
+│   ├── stage1_alignment.env
+│   ├── stage2_lora_150k.env
+│   ├── stage3_doc_ocr_mix.env
+│   ├── stage4_sft_100k_balanced.env
+│   └── stage4_grpo_short_v2.env
 ├── scripts/
 │   ├── train_stage1.sh
 │   ├── train_stage2.sh
@@ -229,30 +240,11 @@ qwen3_siglip2_vlm/
 │   └── train_stage4_grpo.sh
 ├── src/vlm/
 │   ├── data/
-│   │   ├── image_processing.py
-│   │   ├── collator.py
-│   │   ├── llava_pretrain_dataset.py
-│   │   ├── llava_instruct_dataset.py
-│   │   ├── domain_mix_dataset.py
-│   │   └── grpo_dataset.py
 │   ├── models/
-│   │   ├── patch_merger.py
-│   │   ├── projector.py
-│   │   └── vlm_model.py
 │   ├── training/
-│   │   ├── train_stage1.py
-│   │   ├── train_stage2.py
-│   │   ├── train_stage3.py
-│   │   ├── train_stage4_sft.py
-│   │   └── train_stage4_grpo.py
 │   ├── eval/
-│   │   ├── eval_stage3_domain.py
-│   │   └── eval_stage4_ecommerce.py
 │   └── inference/
-│       ├── infer_stage1.py
-│       └── infer_stage2.py
 ├── tools/
-│   └── split_llava_pretrain.py
 ├── docs/assets/
 ├── requirements.txt
 └── README.md
@@ -269,19 +261,38 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-设置 `PYTHONPATH`，让 Python 能找到 `src/vlm` 下的项目代码：
+设置 `PYTHONPATH`：
 
 ```bash
 export PYTHONPATH=$PWD/src:$PYTHONPATH
 ```
 
-训练脚本默认假设模型、数据集和 checkpoint 位于 `/root/autodl-tmp` 下。如果你的路径不同，可以通过环境变量覆盖：
+训练脚本默认使用 `/root/autodl-tmp` 下的模型、数据集和 checkpoint。路径可通过环境变量覆盖：
 
 ```bash
 QWEN_PATH=/path/to/Qwen3-1.7B \
 SIGLIP_PATH=/path/to/siglip2-so400m-patch14-384 \
 OUTPUT_DIR=/path/to/checkpoints/stage1 \
 bash scripts/train_stage1.sh
+```
+
+## Configs
+
+`configs/` 下保存了几组实验环境变量。它们不会改变现有脚本的默认行为，只是把 README 中的主线实验配置固定下来，便于复查和复跑。
+
+使用方式：
+
+```bash
+set -a
+source configs/stage4_grpo_short_v2.env
+set +a
+bash scripts/train_stage4_grpo.sh
+```
+
+也可以继续直接使用脚本默认参数或在命令前传入环境变量：
+
+```bash
+MAX_SAMPLES=100000 MAX_STEPS=3000 bash scripts/train_stage4_grpo.sh
 ```
 
 ## 数据说明
@@ -297,33 +308,11 @@ bash scripts/train_stage1.sh
 
 ## 常用命令
 
-Stage1 视觉语言对齐：
-
 ```bash
 bash scripts/train_stage1.sh
-```
-
-Stage2 通用多模态指令微调：
-
-```bash
 bash scripts/train_stage2.sh
-```
-
-Stage3 文档 / OCR / 图表垂域微调：
-
-```bash
 bash scripts/train_stage3.sh
-```
-
-Stage4 电商垂域 SFT：
-
-```bash
 bash scripts/train_stage4_sft.sh
-```
-
-Stage4 电商垂域 GRPO：
-
-```bash
 bash scripts/train_stage4_grpo.sh
 ```
 
@@ -340,6 +329,5 @@ PYTHONPATH=src python -m vlm.eval.eval_stage4_ecommerce \
 ## 备注
 
 - 当前代码以单机实验脚本为主，没有接入 DeepSpeed/FSDP。
-- 当前 GRPO 实现是在线单次更新版本。代码中用 `current_logps.detach()` 作为当前采样组的 old-policy 快照，因此它更接近 online GRPO，而不是多轮 replay 的 PPO。
-- 动态分辨率 + SigLIP2 Q/K 2D RoPE 是一个有价值的架构实验，但在当前实验中并没有稳定超过固定分辨率分支。
-- Stage4 GRPO short reward v2 提升了整体 F1、generation F1、属性总结和颜色问答，但 `product_style_qa` 和 `product_title_generation` 仍然受 reward 设计影响较大。
+- 动态分辨率 + SigLIP2 Q/K 2D RoPE 是架构实验分支；当前结果没有稳定超过固定分辨率分支。
+- Stage4 GRPO short reward v2 改善了整体 F1、generation F1、属性总结和颜色问答，但 style/title 任务仍需要更细的 reward 设计。

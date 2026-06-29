@@ -1,21 +1,9 @@
-"""Stage 1：视觉-语言对齐训练脚本。
+"""Stage 1 visual-language alignment training.
 
-Stage 1 的目标不是让模型学会复杂问答，而是先让 Qwen3 能够“读懂”
-SigLIP2 + PatchMerger + Projector 产生的视觉 token。
-
-训练策略：
-
-    SigLIP2 vision encoder: 冻结
-    Qwen3 language model:   冻结
-    PatchMerger:            无参数
-    MLPProjector:           训练
-
-也就是说，Stage 1 只训练一个很小的视觉到语言空间的映射层：
-
-    visual tokens -> Qwen hidden space
-
-这个脚本故意写成简单可读的 PyTorch training loop，而不是一上来使用
-Trainer/Accelerate/DeepSpeed。这样更适合学习每一步发生了什么。
+Default training strategy:
+    SigLIP2 vision encoder: frozen
+    Qwen3 language model: frozen
+    MLPProjector: trainable
 """
 
 from __future__ import annotations
@@ -39,11 +27,7 @@ from vlm.models.vlm_model import QwenSiglipVLM, VLMModelConfig
 
 @dataclass
 class Stage1TrainConfig:
-    """Stage 1 训练配置。
-
-    默认值偏向“先跑通 sanity training”，而不是直接跑完整训练。
-    如果要跑完整 558K，可以显式把 ``max_samples`` 和 ``max_steps`` 设为 None。
-    """
+    """Stage 1 training config."""
 
     qwen_path: str = "/root/autodl-tmp/hf_models/Qwen3-1.7B"
     siglip_path: str = "/root/autodl-tmp/hf_models/siglip2-so400m-patch14-384"
@@ -201,7 +185,7 @@ def optional_int(value: str) -> int | None:
 
 
 def set_seed(seed: int) -> None:
-    """固定随机种子，让小规模 sanity run 更容易复现。"""
+    """Set random seed."""
 
     random.seed(seed)
     torch.manual_seed(seed)
@@ -298,11 +282,7 @@ def build_optimizer(
     model: QwenSiglipVLM,
     config: Stage1TrainConfig,
 ) -> tuple[torch.optim.Optimizer, list[torch.nn.Parameter]]:
-    """按当前 requires_grad 状态构造 optimizer。
-
-    Stage 1 初始通常只训练 projector。等到需要解冻 SigLIP 后几层时，我们会重新
-    调用这个函数，让 optimizer 增加 vision tower 的小学习率参数组。
-    """
+    """Build optimizer from current trainable parameters."""
 
     projector_params = [
         param for param in model.projector.parameters() if param.requires_grad
@@ -414,7 +394,7 @@ def save_checkpoint(
     """保存 Stage 1 checkpoint。
 
     Stage 1 只训练 projector，所以主要保存 projector 权重即可。
-    optimizer state 也保存，方便中断后继续训练。
+    optimizer state 也保存，用于中断后继续训练。
     """
 
     ckpt_dir = output_dir / f"step_{step:06d}"
@@ -751,7 +731,7 @@ def train(config: Stage1TrainConfig) -> None:
 if __name__ == "__main__":
     # 示例：
     #
-    # 先跑一个很小的 sanity training：
+    # Small debug run:
     #
     #   PYTHONPATH=/root/qwen3_siglip2_vlm/src \\
     #   python -m vlm.training.train_stage1 \\

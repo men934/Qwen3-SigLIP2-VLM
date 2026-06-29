@@ -1,16 +1,13 @@
-"""Stage 4：电商垂域 GRPO 训练脚本。
+"""Stage 4 e-commerce GRPO-style reward optimization.
 
-本脚本从 Stage4 SFT checkpoint 继续做规则奖励优化，目标是让模型在电商短答案任务上
-更稳定地输出“品牌 / 颜色 / 类型 / 风格”等短答案。
-
-第一版设计取舍：
+Default setup:
     - 冻结 SigLIP2 vision encoder。
     - 冻结 Qwen3 backbone。
     - 冻结 projector，避免稀疏 reward 把视觉-语言对齐层拉偏。
     - 只训练 Qwen LoRA adapter。
     - reference model 固定为 GRPO 开始前的 Stage4 SFT policy，用于 KL 约束。
 
-核心 GRPO 流程：
+Training loop:
     1. 对每个 prompt 采样 G 个回复。
     2. 用规则 reward 计算每个回复的奖励 R_i。
     3. 在同一个 prompt 的 G 个回复内部做标准化：
@@ -20,10 +17,6 @@
     4. 对 advantage 做裁剪，避免少量 reward 噪声造成过大梯度。
     5. 计算 policy 当前 logprob、old logprob 和 reference logprob。
     6. 使用 clipped policy objective + KL penalty 更新 LoRA。
-
-注意：
-    这不是全参 RL。GRPO/RL 阶段如果直接全参更新，非常容易因为 reward 狭窄而破坏
-    SFT 已经学到的通用表达能力。第一版只训练 LoRA，是更稳的工程选择。
 """
 
 from __future__ import annotations
@@ -69,8 +62,7 @@ class Stage4GRPOConfig:
     max_steps: int | None = 500
     num_epochs: int = 1
 
-    # 第一版每个 optimizer step 只处理一个 prompt，但会为这个 prompt 采样 G 个回复。
-    # 这样代码最清楚，也方便控制显存。
+    # Each optimizer step handles one prompt and G sampled responses.
     prompt_batch_size: int = 1
     num_generations: int = 4
     temperature: float = 0.7
@@ -96,13 +88,13 @@ class Stage4GRPOConfig:
     generative_max_reward_tokens: int = 48
 
     # 按任务过采样。20k 实验显示 style/title 被 GRPO 伤害较大，所以默认提高这两类出现频率。
-    # 这里用 JSON 字符串，方便 shell 环境变量直接覆盖。
+    # JSON string so shell environment variables can override it directly.
     task_sampling_weights: str = (
         '{"product_style_qa": 2.5, "product_title_generation": 2.0, '
         '"product_attribute_summary": 1.5}'
     )
 
-    # Early stopping：GRPO 容易在 reward 上过优化，短程 + 早停通常比长跑更稳。
+    # Early stopping for reward over-optimization.
     early_stop_patience: int = 4
     early_stop_min_delta: float = 0.002
     early_stop_min_steps: int = 750
@@ -258,8 +250,7 @@ def parse_task_weights(raw: str) -> dict[str, float]:
 
         {"product_style_qa": 2.5, "product_title_generation": 2.0}
 
-    未出现在字典里的任务权重默认为 1.0。这里不把权重写死在 Dataset 里，是为了后续
-    快速做 ablation：同一份数据可以用不同任务采样策略反复实验。
+    未出现在字典里的任务权重默认为 1.0。
     """
 
     if not raw:
@@ -281,7 +272,7 @@ def build_weighted_sampler(dataset: GRPODataset, config: Stage4GRPOConfig) -> We
 
     20k GRPO 的结果显示，长时间只按原始数据分布训练会伤害 style/title。这里使用
     replacement=True 的 weighted sampler，让稀缺或重点任务在短程 GRPO 中更频繁出现。
-    注意它只改变 prompt 采样频率，不改变每条样本内部的 reward。
+    只改变 prompt 采样频率，不改变每条样本内部的 reward。
     """
 
     task_weights = parse_task_weights(config.task_sampling_weights)
@@ -463,8 +454,7 @@ def reward_one(
        title_generation / attribute_summary 没有唯一标准答案，exact/contains 不适合作主奖励。
        这里用 token F1 作为主奖励，exact 只作为小 bonus，并放宽长度惩罚阈值。
 
-    这个设计的目标是让 GRPO 的 reward 更接近最终评估指标，避免 20k 实验中出现
-    “验证 reward 高，但真实 title/style 指标下降”的偏差。
+    reward 与最终评估指标保持一致，降低 reward hacking 风险。
     """
 
     normalized_pred = normalize_answer(prediction)
@@ -903,7 +893,7 @@ def train(config: Stage4GRPOConfig) -> None:
         print(f"[train] epoch {epoch + 1}/{config.num_epochs}")
         for batch in train_loader:
             if len(batch) != 1:
-                raise ValueError("第一版 GRPO 只支持 prompt_batch_size=1。")
+                raise ValueError("GRPO 当前只支持 prompt_batch_size=1。")
             sample = batch[0]
 
             policy.eval()

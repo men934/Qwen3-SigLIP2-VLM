@@ -1,10 +1,4 @@
-"""LLaVA-Pretrain 数据集读取脚本。
-
-这个 Dataset 负责读取 Stage 1 视觉-语言对齐数据：
-
-    /root/autodl-tmp/hf_datasets/LLaVA-Pretrain/blip_laion_cc_sbu_558k.json
-
-LLaVA-Pretrain 的每条样本大致长这样：
+"""LLaVA-Pretrain dataset reader.
 
     {
       "id": "004539375",
@@ -20,24 +14,6 @@ LLaVA-Pretrain 的每条样本大致长这样：
         }
       ]
     }
-
-这里有一个重要设计：Dataset 不直接返回 tokenized input_ids，也不直接返回
-pixel_values。它只把原始数据规整成统一格式：
-
-    {
-        "id": "...",
-        "image_path": "...",
-        "messages": [
-            {"role": "user", "content": "..."},
-            {"role": "assistant", "content": "..."},
-        ],
-        "source": "llava_pretrain",
-    }
-
-为什么这样设计？
-    多模态训练里，tokenizer、image processor、image token 占位、label mask 都会在
-    collator 里统一处理。如果每个 Dataset 自己 tokenize，后面混合 LLaVA、DocVQA、
-    TextVQA、CORD 等数据时会很难维护。
 """
 
 from __future__ import annotations
@@ -89,12 +65,9 @@ class LlavaPretrainDataset(Dataset):
 
         verify_images:
             如果为 True，初始化时会过滤掉图片文件不存在的样本。
-            这会扫描 55 万条样本，稍微慢一点，但训练前更稳。
-
-            第一版默认 False，因为我们已经解压并核对过图片数量。
 
         max_samples:
-            可选，只取前 N 条样本。用于快速 sanity check 或小规模调试。
+            可选，只取前 N 条样本。
     """
 
     def __init__(
@@ -195,9 +168,7 @@ class LlavaPretrainDataset(Dataset):
             content = self._require_str(turn, "value")
             role = self._map_role(raw_role, sample_id)
 
-            # 这里暂时保留 LLaVA 原始 prompt 里的 <image> 位置。
             # 有些样本是 "<image>\\nWhat is this?"，有些是 "xxx\\n<image>"。
-            # 后面的 conversation/collator 会统一处理 image token 位置。
             messages.append({"role": role, "content": content})
 
         self._validate_messages(messages, sample_id)
@@ -250,13 +221,7 @@ class LlavaPretrainDataset(Dataset):
 
 
 if __name__ == "__main__":
-    # 临时 sanity check，方便学习和调试。
-    #
-    # 这里读取前 3 条 LLaVA-Pretrain 样本，确认：
-    #   1. JSON 能正常加载
-    #   2. 相对图片路径能拼成绝对路径
-    #   3. human/gpt 能映射成 user/assistant
-    #   4. 输出格式统一为 image_path + messages
+    # Quick dataset read check.
     annotation_path = Path(
         "/root/autodl-tmp/hf_datasets/LLaVA-Pretrain/blip_laion_cc_sbu_558k.json"
     )
@@ -281,4 +246,4 @@ if __name__ == "__main__":
         for message in item["messages"]:
             print(f"  - {message['role']}: {message['content']}")
 
-    print("\nLLaVA-Pretrain Dataset sanity check 通过。")
+    print("\nLLaVA-Pretrain Dataset quick check passed.")

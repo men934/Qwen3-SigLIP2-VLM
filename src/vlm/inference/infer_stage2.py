@@ -1,15 +1,8 @@
-"""Stage 2 checkpoint 的简单多模态问答推理脚本。
+"""Multimodal QA inference script for Stage 2 checkpoints.
 
-和 Stage 1 推理脚本不同，Stage 2 主要检查：
-
-    image + question -> answer
-
-支持加载：
+Supports:
     - Stage 2 projector
     - 可选 Qwen LoRA adapter
-
-如果 Stage 2 是 projector-only 训练，直接传 ``--projector-path`` 即可。
-如果 Stage 2 开启了 LoRA，还需要传 ``--lora-path``。
 """
 
 from __future__ import annotations
@@ -67,7 +60,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def find_default_image() -> Path:
-    """找一张默认 COCO 图片，方便直接运行脚本。"""
+    """Find one default COCO image."""
 
     image_root = Path("/root/autodl-tmp/hf_datasets/coco/train2014")
     for path in image_root.glob("*.jpg"):
@@ -83,7 +76,7 @@ def build_inference_prompt(question: str, image_token: str = DEFAULT_IMAGE_TOKEN
 
 
 def load_tokenizer_and_image_processor(args: argparse.Namespace) -> VLMDataCollator:
-    """复用 collator 中已经写好的 tokenizer/image_processor 加载逻辑。"""
+    """Load tokenizer and image processor through VLMDataCollator."""
 
     return VLMDataCollator(
         CollatorConfig(

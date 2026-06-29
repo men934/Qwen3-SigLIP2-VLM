@@ -1,29 +1,7 @@
-"""ViT/SigLIP 视觉 token 的 Patch Merger。
+"""Patch merge for ViT/SigLIP visual tokens.
 
-这个模块实现一个很小但很关键的操作：在把视觉 token 送入语言模型之前，
-先把相邻的图像 patch token 做局部合并，从而减少视觉 token 数量。
-
-在 ViT/SigLIP 这类视觉编码器里，一张图片通常会被表示成二维 patch 网格：
-
-    [B, H, W, C]
-
-其中：
-    B: batch size
-    H: patch 网格高度
-    W: patch 网格宽度
-    C: 视觉特征维度
-
-2x2 Patch Merger 会把每个局部 2x2 patch 块合并成 1 个 token。这里采用
-concat 方式，也就是把 4 个 patch 的特征在通道维拼接起来：
-
-    [B, H, W, C] -> [B, H/2, W/2, 4*C]
-
-再把二维网格 flatten 之后，输出会变成：
-
-    [B, (H/2)*(W/2), 4*C]
-
-这样视觉 token 数会降到原来的 1/4，同时局部 2x2 patch 的信息仍然被保留。
-后面的 projector 再负责把 4*C 维特征映射到 Qwen 的 hidden size。
+Default 2x2 merge:
+    [B, H, W, C] -> [B, (H/2) * (W/2), 4 * C]
 """
 
 from __future__ import annotations
@@ -47,46 +25,20 @@ class GridSize:
 
 
 class PatchMerger(nn.Module):
-    """把局部 m x m 视觉 patch 合并成更少的视觉 token。
+    """Merge local m x m patch blocks by channel concat.
 
-    默认配置是 ``merge_size=2``，也就是最常见的 2x2 patch merge。
+    Inputs:
+        ``[B, H, W, C]`` or ``[B, N, C]`` with ``grid_size=(H, W)``.
 
-    支持两种输入格式：
-        1. ``[B, H, W, C]``
-           patch 的二维空间网格已经显式存在。
-
-        2. ``[B, N, C]`` 加 ``grid_size=(H, W)``
-           Hugging Face 的 ViT/SigLIP 输出经常是这种 flatten 后的格式。
-           这种情况下必须满足 ``N == H * W``。
-
-    输出：
-        ``merged_tokens``:
-            shape 为 ``[B, merged_H * merged_W, merge_size^2 * C]`` 的 Tensor。
-
-        ``merged_grid_size``:
-            ``GridSize(merged_H, merged_W)``。
-
-    为什么用 concat，而不是 average？
-        average 会保持通道维 C 不变，但会丢掉一些局部细节。
-        concat 会保留 m*m 个 patch 的原始特征，然后交给后面的 MLP projector
-        学习怎么融合它们。
+    Output:
+        ``[B, merged_H * merged_W, merge_size^2 * C]`` and merged grid size.
     """
 
     def __init__(self, merge_size: int = 2, allow_truncate: bool = False) -> None:
-        """创建 PatchMerger。
+        """Create a patch merger.
 
-        Args:
-            merge_size:
-                空间合并大小。``2`` 表示每个 2x2 patch 块合并成 1 个 token。
-                ``merge_size`` 必须是正整数。
-
-            allow_truncate:
-                如果为 False，H 和 W 必须能被 ``merge_size`` 整除。
-                如果为 True，会丢弃底部/右侧无法组成完整 merge block 的多余行列。
-
-                VLM 训练早期建议保持 False，让 shape 问题尽早暴露。
-                后续做动态分辨率时，resize 逻辑应该保证 H/W 能被
-                ``patch_size * merge_size`` 对齐。
+        ``allow_truncate=True`` drops the bottom/right remainder when H or W is
+        not divisible by ``merge_size``.
         """
 
         super().__init__()
@@ -116,10 +68,8 @@ class PatchMerger(nn.Module):
         """
 
         if x.ndim == 4:
-            # 输入已经是显式二维空间格式：[B, H, W, C]。
             x_4d = x
         elif x.ndim == 3:
-            # 输入是 flatten 后的 patch-token 格式：[B, N, C]。
             if grid_size is None:
                 raise ValueError("当 x 的 shape 为 [B, N, C] 时必须传入 grid_size。")
 
@@ -164,7 +114,6 @@ class PatchMerger(nn.Module):
                     "或者在图像预处理阶段把尺寸 resize 到可整除。"
                 )
 
-            # 丢弃底部和右侧无法组成完整 merge block 的 patch。
             new_height = (height // merge_size) * merge_size
             new_width = (width // merge_size) * merge_size
             x = x[:, :new_height, :new_width, :]
@@ -173,15 +122,7 @@ class PatchMerger(nn.Module):
         merged_height = height // merge_size
         merged_width = width // merge_size
 
-        # 下面三步是 patch merge 的核心。
-        #
-        # 第 1 步：
-        #   把 H 和 W 按 merge_size 分组。
-        #
-        #   [B, H, W, C]
-        #   -> [B, H/m, m, W/m, m, C]
-        #
-        # 当 m=2 时，每个新的空间位置都对应原来的一个 2x2 局部 patch 块。
+        # [B, H, W, C] -> [B, H/m, m, W/m, m, C]
         x = x.reshape(
             batch_size,
             merged_height,
@@ -191,20 +132,10 @@ class PatchMerger(nn.Module):
             channels,
         )
 
-        # 第 2 步：
-        #   把两个局部 merge 维度移动到通道维附近。
-        #
-        #   [B, H/m, m, W/m, m, C]
-        #   -> [B, H/m, W/m, m, m, C]
-        #
-        # 这样更方便下一步把局部 m*m 个 patch 拼到特征维。
+        # [B, H/m, m, W/m, m, C] -> [B, H/m, W/m, m, m, C]
         x = x.permute(0, 1, 3, 2, 4, 5)
 
-        # 第 3 步：
-        #   flatten 合并后的二维网格，并把每个 m*m 局部块 concat 到通道维。
-        #
-        #   [B, H/m, W/m, m, m, C]
-        #   -> [B, (H/m)*(W/m), m*m*C]
+        # [B, H/m, W/m, m, m, C] -> [B, (H/m)*(W/m), m*m*C]
         merged_tokens = x.reshape(
             batch_size,
             merged_height * merged_width,
@@ -234,22 +165,7 @@ class PatchMerger(nn.Module):
 
 
 if __name__ == "__main__":
-    # 临时 sanity check，方便学习和调试。
-    #
-    # 这里构造一个很小的假 patch 网格：
-    #   B = 2
-    #   H = 4
-    #   W = 6
-    #   C = 3
-    #
-    # 经过 2x2 merge 后：
-    #   merged_H = 2
-    #   merged_W = 3
-    #   输出 token 数 = 2 * 3 = 6
-    #   输出特征维 = 2 * 2 * 3 = 12
-    #
-    # 因此期望输出 shape 是：
-    #   [2, 6, 12]
+    # Quick shape check for both supported input formats.
     torch.manual_seed(0)
 
     merger = PatchMerger(merge_size=2)
@@ -261,8 +177,6 @@ if __name__ == "__main__":
     print("合并后 tokens:", tuple(merged_from_4d.shape))
     print("合并后网格:", merged_grid.as_tuple())
 
-    # 同一批数据也可以用 ViT/SigLIP 常见的 flatten token 格式传入：
-    #   [B, N, C]，其中 N = H * W。
     x_3d = x_4d.reshape(2, 4 * 6, 3)
     merged_from_3d, merged_grid_3d = merger(x_3d, grid_size=(4, 6))
 
@@ -270,11 +184,10 @@ if __name__ == "__main__":
     print("合并后 tokens:", tuple(merged_from_3d.shape))
     print("合并后网格:", merged_grid_3d.as_tuple())
 
-    # 两种输入路径应该得到完全一致的 merged tokens。
     max_diff = (merged_from_4d - merged_from_3d).abs().max().item()
     print("\n4D 路径和 3D 路径的最大差异:", max_diff)
 
     assert tuple(merged_from_4d.shape) == (2, 6, 12)
     assert merged_grid.as_tuple() == (2, 3)
     assert max_diff == 0.0
-    print("\nPatchMerger sanity check 通过。")
+    print("\nPatchMerger quick check passed.")

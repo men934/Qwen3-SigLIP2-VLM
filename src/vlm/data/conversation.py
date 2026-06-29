@@ -1,6 +1,4 @@
-"""多模态对话样本的 prompt 构造工具。
-
-Dataset 返回的是统一的 messages 格式：
+"""Prompt formatting utilities for multimodal conversations.
 
     [
         {"role": "user", "content": "<image>\\nWhat is this?"},
@@ -14,16 +12,6 @@ Dataset 返回的是统一的 messages 格式：
     What is this?<|im_end|>
     <|im_start|>assistant
     a dragon kite flying in the blue sky<|im_end|>
-
-这个文件的职责是：
-
-    1. 规范 role 和 content
-    2. 构造 Qwen 风格 prompt
-    3. 保留 assistant answer 的文本边界信息
-    4. 为后续 collator 做 label mask 打基础
-
-注意：
-    这个脚本目前只处理文本层面的 prompt 拼接，不做 tokenizer，也不做图片读取。
 """
 
 from __future__ import annotations
@@ -58,15 +46,7 @@ class FormattedConversation:
 
 
 def normalize_messages(raw_messages: list[dict[str, Any]]) -> list[Message]:
-    """把 Dataset 输出的 dict messages 转成强约束的 Message 列表。
-
-    这里做轻量校验，尽早发现坏样本。后续 collator 可以假设 messages 已经满足：
-
-        - role 只可能是 system/user/assistant
-        - content 一定是字符串
-        - 至少有一轮 user 和一轮 assistant
-        - 最后一轮是 assistant
-    """
+    """Normalize raw dict messages and validate their roles/content."""
 
     if not isinstance(raw_messages, list):
         raise TypeError(f"raw_messages 必须是 list，当前为 {type(raw_messages).__name__}。")
@@ -124,27 +104,7 @@ def format_qwen_conversation(
     system_prompt: Optional[str] = None,
     add_generation_prompt: bool = False,
 ) -> FormattedConversation:
-    """把 messages 转成 Qwen ChatML prompt。
-
-    Args:
-        raw_messages:
-            Dataset 返回的 messages。
-
-        system_prompt:
-            可选 system prompt。Stage 1 对齐训练通常不需要。
-
-        add_generation_prompt:
-            推理时可以设为 True，让 prompt 以 ``<|im_start|>assistant\\n`` 结尾，
-            等模型继续生成。训练时应该保持 False，因为 assistant answer 已经在
-            messages 里。
-
-    Returns:
-        ``FormattedConversation``。
-
-    训练时最重要的是：
-        ``prompt_without_answer`` + ``assistant_text`` 可以还原完整 ``prompt``。
-        后续 collator 会用这个边界来决定哪些 token 计算 loss。
-    """
+    """Format messages as Qwen ChatML."""
 
     messages = normalize_messages(raw_messages)
 
@@ -190,13 +150,7 @@ def ensure_image_token(
     messages: list[dict[str, Any]],
     image_token: str = DEFAULT_IMAGE_TOKEN,
 ) -> list[dict[str, str]]:
-    """确保 user 消息中含有 image token。
-
-    LLaVA-Pretrain 原始数据本身已经带 ``<image>``，但后续我们处理 DocVQA、CORD
-    这类数据时，可能需要手动把 image token 插进去。
-
-    这个函数会返回一个新的 messages 列表，不会原地修改传入对象。
-    """
+    """Return a copy of messages with an image token in the first user turn."""
 
     normalized = normalize_messages(messages)
     has_image = any(
@@ -222,13 +176,7 @@ def ensure_image_token(
 
 
 if __name__ == "__main__":
-    # 临时 sanity check，方便学习和调试。
-    #
-    # 这里模拟 LLaVA-Pretrain Dataset 输出的一条样本，检查：
-    #   1. role/content 规范化
-    #   2. Qwen ChatML prompt 拼接
-    #   3. assistant answer 边界
-    #   4. image token 自动插入逻辑
+    # Quick prompt formatting check.
     sample_messages = [
         {"role": "user", "content": "<image>\nWhat is this?"},
         {"role": "assistant", "content": "a dragon kite flying in the blue sky"},
@@ -261,4 +209,4 @@ if __name__ == "__main__":
         print(f"- {message['role']}: {message['content']}")
 
     assert with_image_messages[0]["content"].startswith("<image>\n")
-    print("\nConversation sanity check 通过。")
+    print("\nConversation quick check passed.")

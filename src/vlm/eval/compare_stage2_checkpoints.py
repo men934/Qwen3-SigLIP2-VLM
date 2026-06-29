@@ -1,14 +1,8 @@
-"""对比 Stage 1 / Stage 2 checkpoint 的固定样例问答效果。
-
-这个脚本不是严格 benchmark，而是用于开发阶段做 qualitative eval：
+"""Qualitative comparison for Stage 1 / Stage 2 checkpoints.
 
     1. 固定抽取一批验证样本；
     2. 对多个 checkpoint 生成回答；
-    3. 输出 JSON 和 Markdown，方便人工观察失败模式。
-
-它不会给出严格准确率，因为 LLaVA-Instruct 的参考答案经常是开放式自然语言。
-如果要做可量化评测，后续应该接 TextVQA / DocVQA / ChartQA 这类有标准
-answer normalization 的数据集。
+    3. 输出 JSON 和 Markdown。
 """
 
 from __future__ import annotations
@@ -116,7 +110,7 @@ def extract_first_qa(sample: dict[str, Any]) -> tuple[str, str]:
 
 
 def infer_question_type(question: str) -> str:
-    """根据问题文本粗略标注样本类型，方便人工看失败模式。"""
+    """Infer a coarse question type from text."""
 
     q = question.lower()
     if "how many" in q or "number of" in q or re.search(r"\bcount\b", q):
@@ -268,7 +262,7 @@ def generate_answer(
 
 
 def default_checkpoints() -> list[CheckpointSpec]:
-    """当前项目里默认用于 qualitative eval 的 checkpoint。"""
+    """Default checkpoints for qualitative eval."""
 
     return [
         CheckpointSpec(
@@ -338,7 +332,7 @@ def write_markdown_report(
     checkpoints: list[CheckpointSpec],
     args: argparse.Namespace,
 ) -> None:
-    """把 qualitative eval 结果写成 Markdown，方便直接阅读。"""
+    """Write qualitative eval results as Markdown."""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_names = [checkpoint.name for checkpoint in checkpoints]

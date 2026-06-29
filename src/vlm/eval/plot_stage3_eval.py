@@ -1,15 +1,11 @@
-"""绘制 Stage 3 定量评估对比图。
-
-``eval_stage3_domain.py`` 会输出结构化的 ``metrics.json``，但只看 JSON/Markdown
-不够直观。这个脚本负责把几个关键指标画成图片，方便放进 README、汇报 PPT 或面试
-项目说明里。
+"""Plot Stage 3 evaluation metrics.
 
 默认生成两张图：
     1. overall_metrics_comparison.png
        对比不同 checkpoint 的整体 EM / F1 / Chart relaxed accuracy。
 
     2. by_source_f1_comparison.png
-       对比不同 checkpoint 在各数据源上的 F1。这里默认排除 CORD，因为当前 300 条
+       对比不同 checkpoint 在各数据源上的 F1。默认排除 CORD，因为当前 300 条
        子集里 CORD 只有 3 条，而且 JSON 任务需要单独拉长生成长度后再评估。
 """
 
@@ -72,7 +68,7 @@ def load_metrics(metrics_path: str | Path) -> list[dict[str, Any]]:
 
 
 def checkpoint_label(name: str) -> str:
-    """把 checkpoint 内部名转换成适合图表展示的短标签。"""
+    """Return a compact checkpoint label."""
 
     if name in CHECKPOINT_LABELS:
         return CHECKPOINT_LABELS[name]
@@ -82,7 +78,7 @@ def checkpoint_label(name: str) -> str:
 
 
 def source_label(name: str) -> str:
-    """把数据源内部名转换成图表展示标签。"""
+    """Return a compact source label."""
 
     return SOURCE_LABELS.get(name, name)
 

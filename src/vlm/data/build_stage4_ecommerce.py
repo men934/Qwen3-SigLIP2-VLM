@@ -1,20 +1,8 @@
-"""构建 Stage 4 电商垂域 SFT / GRPO 数据。
-
-当前脚本先支持 ABO small images + listings metadata：
+"""Build Stage 4 e-commerce SFT / GRPO data.
 
     /root/autodl-tmp/hf_datasets/stage4_ecommerce/abo/extracted
 
-为什么 Stage 4 要同时输出 SFT 和 GRPO 两种格式？
-
-    SFT:
-        模型看到 ``<image> + 问题``，直接学习标准答案。
-        样本需要包含 user + assistant 两轮 messages，能复用现有 collator。
-
-    GRPO:
-        模型看到 ``<image> + 问题`` 后自己生成多个候选回答，再用 reward 函数打分。
-        因此样本不应该把 assistant answer 放进 prompt，而是要保存可验证答案和奖励配置。
-
-本脚本输出：
+Outputs:
 
     output_root/
         sft/train.json
@@ -25,7 +13,7 @@
         grpo/test.json
         manifest.json
 
-SFT 样本格式沿用项目现有格式：
+SFT sample:
 
     {
       "id": "abo_B000_color",
@@ -40,7 +28,7 @@ SFT 样本格式沿用项目现有格式：
       "eval": {"metric": "exact_match"}
     }
 
-GRPO 样本格式是训练器友好的“prompt + reward metadata”：
+GRPO sample:
 
     {
       "id": "abo_B000_color_grpo",
@@ -58,8 +46,6 @@ GRPO 样本格式是训练器友好的“prompt + reward metadata”：
       "answer": "Black"
     }
 
-后面写 GRPO trainer 时，可以对同一个 prompt 采样多条回答，然后用 reward.answers
-计算组内相对优势。
 """
 
 from __future__ import annotations

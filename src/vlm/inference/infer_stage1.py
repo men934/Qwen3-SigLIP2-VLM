@@ -1,11 +1,4 @@
-"""Stage 1 projector checkpoint 的简单推理脚本。
-
-这个脚本用于检查 Stage 1 视觉-语言对齐训练是否真的学到了一些东西。
-
-输入：
-    1. 一张图片
-    2. 一个 Stage 1 projector checkpoint
-    3. 一个简单问题，例如 "Describe this image briefly."
+"""Inference script for a Stage 1 projector checkpoint.
 
 流程：
     image
@@ -14,10 +7,6 @@
         -> 把 prompt 里的 <image> 替换成 visual embeddings
         -> Qwen3.generate
         -> decode 文本
-
-注意：
-    Stage 1 只训练 projector，没有做多模态指令微调。
-    所以它更适合看 caption/描述类输出，不应该期待复杂 VQA 或推理能力。
 """
 
 from __future__ import annotations
@@ -71,7 +60,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def find_default_image() -> Path:
-    """找一张默认图片，方便直接运行脚本。"""
+    """Find one default image."""
 
     from vlm.data.image_processing import find_first_image
 
@@ -93,13 +82,7 @@ def build_inference_prompt(question: str, image_token: str = DEFAULT_IMAGE_TOKEN
 
 
 def load_tokenizer_and_image_processor(args: argparse.Namespace) -> VLMDataCollator:
-    """复用 VLMDataCollator 来加载 tokenizer 和 image processor。
-
-    这里不直接使用 collator 组 batch，只是借用它已经写好的：
-        - Qwen tokenizer 加载
-        - <image> special token 注册
-        - SigLIP image processor 加载
-    """
+    """Load tokenizer and image processor through VLMDataCollator."""
 
     return VLMDataCollator(
         CollatorConfig(

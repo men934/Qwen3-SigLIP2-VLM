@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 1 视觉-语言对齐训练启动脚本。
 #
-# 这个脚本用于训练：
+# 训练结构：
 #   SigLIP2 -> PatchMerger -> MLPProjector -> Qwen3
 #
 # Stage 1 的冻结策略：
@@ -9,7 +9,7 @@
 #   - Qwen3 language model 冻结
 #   - 只训练 MLPProjector
 #
-# 默认值偏向“小规模 sanity training”，避免第一次运行时直接扫完整 558K 数据。
+# 默认值用于小规模 debug run，避免第一次运行时直接扫完整 558K 数据。
 # 你可以通过环境变量覆盖这些默认值，例如：
 #
 #   MAX_SAMPLES=1024 MAX_STEPS=100 BATCH_SIZE=2 GRAD_ACCUM=8 \
@@ -38,13 +38,13 @@ IMAGE_ROOT="${IMAGE_ROOT:-/root/autodl-tmp/hf_datasets/LLaVA-Pretrain}"
 # 输出路径
 OUTPUT_DIR="${OUTPUT_DIR:-/root/autodl-tmp/checkpoints/stage1_align}"
 
-# 训练规模。默认先跑一个小规模版本，确认 loss/backward/checkpoint 正常。
+# 训练规模。
 MAX_SAMPLES="${MAX_SAMPLES:-1024}"
 MAX_STEPS="${MAX_STEPS:-100}"
 NUM_EPOCHS="${NUM_EPOCHS:-1}"
 
 # 显存相关参数。
-# 当前模型在 RTX PRO 6000 上 batch_size=2 通常没问题；如果 OOM，先降到 1。
+# 如果 OOM，先降 BATCH_SIZE。
 BATCH_SIZE="${BATCH_SIZE:-2}"
 GRAD_ACCUM="${GRAD_ACCUM:-8}"
 MAX_LENGTH="${MAX_LENGTH:-512}"

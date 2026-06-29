@@ -1,10 +1,4 @@
-"""LLaVA-Instruct 数据集读取脚本。
-
-Stage 2 的目标是多模态指令微调，不再只是让模型根据图片生成 caption，而是训练：
-
-    image + user question -> assistant answer
-
-LLaVA-Instruct 的原始样本通常长这样：
+"""LLaVA-Instruct dataset reader.
 
     {
       "id": "000000033471",
@@ -16,17 +10,6 @@ LLaVA-Instruct 的原始样本通常长这样：
         {"from": "gpt", "value": "There is an advertisement."}
       ]
     }
-
-这个 Dataset 仍然遵守项目当前的数据边界：
-
-    Dataset:
-        只读取 JSON，解析图片路径，转换 role。
-
-    Collator:
-        负责读取图片、tokenize、多轮 assistant label mask。
-
-    Model:
-        负责把 <image> token 替换成视觉 embedding。
 """
 
 from __future__ import annotations
@@ -71,8 +54,7 @@ class LlavaInstructDataset(Dataset):
             例如 ``llava_instruct_150k.json``。
 
         image_root:
-            图片根目录。对我们当前下载的数据，推荐使用
-            ``/root/autodl-tmp/hf_datasets/coco/train2014``。
+            图片根目录。
 
         image_token:
             图片占位符，默认 ``<image>``。
@@ -81,7 +63,7 @@ class LlavaInstructDataset(Dataset):
             如果为 True，初始化时过滤掉图片缺失样本。
 
         max_samples:
-            可选，只取前 N 条，方便小规模 sanity check。
+            可选，只取前 N 条。
     """
 
     def __init__(
@@ -186,18 +168,7 @@ class LlavaInstructDataset(Dataset):
         )
 
     def _resolve_image_path(self, image_rel_path: str) -> Path:
-        """把 LLaVA 的 image 字段解析成本地图片路径。
-
-        当前常见情况：
-            - llava_instruct_150k.json: ``000000033471.jpg``
-            - COCO train2014 实际文件名: ``COCO_train2014_000000033471.jpg``
-            - llava_v1_5_mix665k.json: ``coco/train2017/000000033471.jpg``
-
-        因此这里会依次尝试：
-            1. image_root / 原始相对路径
-            2. image_root / basename
-            3. image_root / COCO_train2014_basename
-        """
+        """Resolve the LLaVA image field to a local image path."""
 
         raw_path = Path(image_rel_path)
         candidates = [
@@ -252,8 +223,8 @@ class LlavaInstructDataset(Dataset):
             return
         if image_count > 1:
             raise ValueError(
-                f"样本 {sample_id} 当前包含多个 {self.image_token}，"
-                "第一版模型只支持单图输入。"
+                f"样本 {sample_id} 包含多个 {self.image_token}，"
+                "当前模型只支持单图输入。"
             )
 
 

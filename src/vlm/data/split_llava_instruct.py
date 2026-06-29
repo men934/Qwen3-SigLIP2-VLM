@@ -1,15 +1,7 @@
-"""切分 LLaVA-Instruct-150K 的训练集和验证集。
-
-Stage 2 指令微调不能只看训练 loss，因为模型可能只是记住了训练样本的回答格式。
-这个脚本把原始 ``llava_instruct_150k.json`` 固定随机切分成：
+"""Create a fixed train/val split for LLaVA-Instruct-150K.
 
     - train.json：真正参与训练的样本；
     - val.json：不参与训练，只用于周期性计算 val loss。
-
-默认使用 5000 条验证样本。这个比例对 150K 数据来说足够轻量：
-
-    - 验证集足够大，可以观察 loss 是否跟着训练 loss 一起下降；
-    - 训练集仍然保留绝大多数样本，不影响 Stage 2 全量训练的规模。
 """
 
 from __future__ import annotations

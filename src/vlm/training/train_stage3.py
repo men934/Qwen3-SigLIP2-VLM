@@ -1,25 +1,10 @@
-"""Stage 3：文档/OCR/图表垂域混合微调脚本。
+"""Stage 3 document/OCR/chart domain SFT.
 
-Stage 1:
-    image -> caption，对齐视觉 token 和语言模型 hidden space。
-
-Stage 2:
-    image + general instruction -> answer，学习通用多模态指令跟随。
-
-Stage 3:
-    image + domain question/instruction -> domain answer，强化文档理解、OCR、票据抽取、
-    图表问答等垂域能力。
-
-本脚本默认从固定分辨率 Stage 2 checkpoint 继续训练：
+Default initialization:
     - 加载 Stage 2 projector。
     - 加载 Stage 2 LoRA adapter，并保持 LoRA 可训练。
     - SigLIP2 继续冻结。
     - Qwen3 主干继续冻结。
-
-为什么不默认全参数微调？
-    Qwen3-1.7B + SigLIP2 SO400M 全参数训练显存和稳定性压力都更大，而且我们当前已有
-    Stage 2 LoRA 作为良好起点。对这个学习型项目，先做 projector + LoRA 的垂域继续
-    微调更可控；如果后面要展示更强工程能力，可以再加 ZeRO/FSDP 的全参实验。
 """
 
 from __future__ import annotations
@@ -323,12 +308,7 @@ def save_best_checkpoint(
     val_loss: float,
     output_dir: Path,
 ) -> None:
-    """保存当前验证集最优 checkpoint。
-
-    常规 ``save_every`` 只按固定步数保存，例如 1000/2000/3000。实际训练中最好的
-    val loss 可能出现在 3500/4500 这种非保存点。为了避免错过最优模型，这里额外
-    维护一个稳定的 ``best`` 目录，每次 val loss 刷新时覆盖它。
-    """
+    """Save the best validation checkpoint to ``best``."""
 
     ckpt_dir = output_dir / "best"
     ckpt_dir.mkdir(parents=True, exist_ok=True)

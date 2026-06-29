@@ -1,11 +1,4 @@
-"""VLM 训练用的 batch collator。
-
-传统 CV 项目的 collator 通常只需要做：
-
-    images -> stack
-    labels -> tensor
-
-但 VLM 的 collator 要复杂很多，因为一个样本同时包含图片和文本对话：
+"""Batch collator for VLM training.
 
     image_path + messages
         -> pixel_values
@@ -13,19 +6,6 @@
         -> input_ids
         -> labels
         -> attention_mask
-
-这个文件第一版支持 Stage 1 LLaVA-Pretrain 对齐训练，核心目标是：
-
-    1. 读取图片并得到 SigLIP2 pixel_values
-    2. 把 messages 格式化成 Qwen prompt
-    3. tokenize 文本
-    4. 构造 labels，只对 assistant answer 部分计算 loss
-    5. padding 成 batch
-
-注意：
-    这个 collator 暂时还没有把 ``<image>`` 展开成多个 visual patch token。
-    第一版先保留 ``<image>`` 为单个特殊 token，后续写 ``vlm_model.py`` 时再负责
-    将这个位置替换/扩展为 PatchMerger + Projector 得到的 visual embeddings。
 """
 
 from __future__ import annotations
@@ -48,7 +28,7 @@ try:
         normalize_messages,
     )
     from .image_processing import SiglipImageProcessor
-except ImportError:  # 允许直接 python src/vlm/data/collator.py 运行 sanity check
+except ImportError:  # 允许直接 python src/vlm/data/collator.py 运行
     from conversation import (
         IM_END,
         IM_START,
@@ -81,36 +61,18 @@ class CollatorConfig:
 
 
 class VLMDataCollator:
-    """把多模态样本列表整理成模型训练所需的 batch。
+    """Convert multimodal examples into model inputs.
 
-    输入样本来自 Dataset，格式类似：
+    Main tensors:
+        ``input_ids``: ``LongTensor[B, L]``
+        ``attention_mask``: ``LongTensor[B, L]``
+        ``labels``: ``LongTensor[B, L]``
+        ``pixel_values``: ``FloatTensor[B, 3, H, W]``
 
-        {
-            "id": "...",
-            "image_path": "...",
-            "messages": [
-                {"role": "user", "content": "<image>\\nDescribe this image."},
-                {"role": "assistant", "content": "a cat on a sofa"},
-            ],
-            "source": "llava_pretrain",
-        }
-
-    输出 batch：
-
-        {
-            "input_ids":      LongTensor[B, L],
-            "attention_mask": LongTensor[B, L],
-            "labels":         LongTensor[B, L],
-            "pixel_values":   FloatTensor[B, 3, 384, 384],
-            "image_paths":    list[str],
-            "ids":            list[str],
-            "sources":        list[str],
-        }
-
-    labels 的规则：
-        - prompt/user/image/system 部分为 IGNORE_INDEX
+    Label mask:
+        - prompt/user/image/system positions use IGNORE_INDEX
         - assistant answer 和 <|im_end|> 为正常 token id
-        - padding 部分为 IGNORE_INDEX
+        - padding positions use IGNORE_INDEX
     """
 
     def __init__(self, config: CollatorConfig) -> None:
@@ -148,8 +110,6 @@ class VLMDataCollator:
             "image_paths": image_paths,
             "ids": [example.get("id", "") for example in examples],
             "sources": [example.get("source", "") for example in examples],
-            # Stage 3 的定量评估需要保留这些元信息。
-            # 训练时模型不会读取它们，所以对 Stage 1/Stage 2 没有行为影响。
             "tasks": [example.get("task", "") for example in examples],
             "answers": [example.get("answers", []) for example in examples],
             "evals": [example.get("eval", {}) for example in examples],
@@ -182,15 +142,7 @@ class VLMDataCollator:
         return tokenizer
 
     def _ensure_image_token(self, image_token: str) -> int:
-        """确保 ``<image>`` 是 tokenizer 里的单个特殊 token。
-
-        如果不这样做，Qwen tokenizer 可能把 ``<image>`` 拆成多个 subword token。
-        后续模型替换 visual embeddings 时，单个特殊 token 更容易定位。
-
-        注意：
-            如果这里新增了 token，后面加载 Qwen 模型时必须调用
-            ``resize_token_embeddings(len(tokenizer))``，否则 embedding 表大小不匹配。
-        """
+        """Ensure ``<image>`` is represented by one tokenizer id."""
 
         token_id = self.tokenizer.convert_tokens_to_ids(image_token)
         unk_id = self.tokenizer.unk_token_id
@@ -258,7 +210,7 @@ class VLMDataCollator:
         image_token_count = input_ids.count(self.image_token_id)
         if image_token_count != 1:
             raise ValueError(
-                "当前第一版 collator 要求每条样本恰好包含 1 个 image token。"
+                "每条样本必须恰好包含 1 个 image token。"
                 f"实际 image_token_count={image_token_count}, id={example.get('id')}。"
             )
 
@@ -285,12 +237,7 @@ class VLMDataCollator:
         labels: list[int],
         max_length: int,
     ) -> tuple[list[int], list[int]]:
-        """截断过长样本。
-
-        第一版采用右截断，保留开头的 user prompt 和前半段 answer。
-        这对 Stage 1 caption 数据通常够用。后面做长文档/多轮对话时，再考虑更精细的
-        截断策略。
-        """
+        """Right-truncate over-length samples."""
 
         if max_length <= 0:
             raise ValueError(f"max_length 必须为正数，当前为 {max_length}。")
@@ -342,19 +289,7 @@ class VLMDataCollator:
 
 
 if __name__ == "__main__":
-    # 临时 sanity check，方便学习和调试。
-    #
-    # 这里组合前面已经写好的：
-    #   LlavaPretrainDataset
-    #   SiglipImageProcessor
-    #   Qwen tokenizer
-    #   VLMDataCollator
-    #
-    # 检查最终 batch 是否包含：
-    #   input_ids: [B, L]
-    #   attention_mask: [B, L]
-    #   labels: [B, L]
-    #   pixel_values: [B, 3, 384, 384]
+    # Quick batch construction check.
     try:
         from .llava_pretrain_dataset import LlavaPretrainDataset
     except ImportError:
@@ -403,4 +338,4 @@ if __name__ == "__main__":
     assert tuple(batch["pixel_values"].shape[:2]) == (2, 3)
     assert tuple(batch["pixel_values"].shape[-2:]) == (384, 384)
     assert (batch["input_ids"] == batch["image_token_id"]).sum(dim=1).tolist() == [1, 1]
-    print("\nVLMDataCollator sanity check 通过。")
+    print("\nVLMDataCollator quick check passed.")

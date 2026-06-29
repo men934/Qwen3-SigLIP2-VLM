@@ -1,11 +1,6 @@
-"""把 Stage 3 垂域数据转换成项目统一 JSON 格式。
+"""Convert Stage 3 domain datasets into the unified JSON format.
 
-为什么需要这个脚本？
-    domain_mix 目录下的数据来自不同公开数据集，它们大多是 Hugging Face parquet：
-    图片 bytes 嵌在 parquet 的 ``image`` 字段里，文本字段也各不相同。训练时如果每个
-    batch 都直接读 parquet，会让 Dataset 逻辑很重，也不方便统一评估。
-
-这个脚本做一次离线转换：
+Pipeline:
     1. 从 parquet 读取样本。
     2. 把图片 bytes 写成普通图片文件。
     3. 把各种字段统一成 ``messages`` 格式。
@@ -24,9 +19,6 @@
       "answers": ["answer", "..."],
       "eval": {"metric": "vqa"}
     }
-
-注意：
-    SROIE 当前本地只有 train.zip/test.zip，初步检查没有可见标签文件，所以第一版跳过。
 """
 
 from __future__ import annotations
@@ -650,7 +642,7 @@ def collect_dataset(config: BuildConfig) -> tuple[list[dict[str, Any]], list[dic
         "train": 0,
         "val": 0,
         "test": 0,
-        "note": "当前本地版本只看到 train.zip/test.zip 图片，未发现标签文件，第一版跳过。",
+        "note": "本地版本只看到 train.zip/test.zip 图片，未发现标签文件，已跳过。",
     }
 
     rng = random.Random(config.seed)

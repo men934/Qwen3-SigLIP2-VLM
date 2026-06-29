@@ -1,31 +1,10 @@
-"""Stage 4：电商垂域 SFT 微调脚本。
+"""Stage 4 e-commerce domain SFT.
 
-Stage 4 的目标：
-    在已经完成 Stage 1/2/3 的基础上，让模型进一步适应电商商品图场景，例如：
-
-        - 识别商品类型：CELLULAR_PHONE_CASE / SHOES / CHAIR ...
-        - 识别商品颜色：Black / Brown / Multicolor ...
-        - 识别品牌：AmazonBasics / find. ...
-        - 生成商品标题或属性摘要
-
-本脚本默认使用 ABO small images + metadata 构建出的 SFT 数据：
-
-    /root/autodl-tmp/hf_datasets/stage4_ecommerce/stage4_abo/sft/train.json
-
-默认从 Stage 3 最优 checkpoint 继续训练：
-
-    /root/autodl-tmp/checkpoints/stage3_doc_ocr_mix/step_006000
-
-训练策略：
+Training strategy:
     - SigLIP2 vision encoder 冻结。
     - Qwen3 主干冻结。
     - 加载 Stage 3 projector 并继续训练。
     - 加载 Stage 3 LoRA adapter，并保持 LoRA 可训练。
-
-为什么 Stage 4 先做 SFT，再做 GRPO？
-    GRPO 依赖模型已经知道“应该用短答案回答商品属性问题”。如果一上来就做 GRPO，
-    模型可能生成冗长解释或格式不稳定，reward 稀疏且训练效率低。先用 SFT 把回答格式
-    和电商概念对齐，再用 GRPO 强化 exact match，会更稳。
 """
 
 from __future__ import annotations
@@ -206,12 +185,7 @@ def move_batch_to_device(batch: dict[str, Any], device: torch.device) -> dict[st
 def build_dataloader(
     config: Stage4SFTConfig,
 ) -> tuple[DataLoader, DataLoader | None, VLMDataCollator]:
-    """构造 Stage 4 SFT 的 Dataset、Collator 和 DataLoader。
-
-    注意：
-        ABO SFT JSON 已经是项目统一格式，所以直接复用 DomainMixDataset。
-        它的名字虽然叫 DomainMixDataset，但本质上读取的是统一 messages JSON。
-    """
+    """Build Stage 4 SFT dataset, collator and dataloader."""
 
     train_dataset = DomainMixDataset(
         annotation_path=config.annotation_path,
@@ -336,7 +310,7 @@ def save_best_checkpoint(
     val_loss: float,
     output_dir: Path,
 ) -> None:
-    """保存当前验证集最优 checkpoint 到 ``best`` 目录。"""
+    """Save the best validation checkpoint to ``best``."""
 
     ckpt_dir = output_dir / "best"
     ckpt_dir.mkdir(parents=True, exist_ok=True)

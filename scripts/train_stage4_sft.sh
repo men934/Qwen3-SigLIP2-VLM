@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 4 电商垂域 SFT 启动脚本。
 #
-# 这个脚本默认做一个 5k 样本的 ABO 电商小规模实验：
+# 默认 5k 样本 ABO 电商 SFT：
 #   - 从 Stage 3 最优 checkpoint 继续训练
 #   - 训练 projector + Qwen LoRA
 #   - 冻结 SigLIP2 和 Qwen3 主干
@@ -54,7 +54,7 @@ USE_SIGLIP_QK_2D_ROPE="${USE_SIGLIP_QK_2D_ROPE:-0}"
 SIGLIP_ROPE_BASE="${SIGLIP_ROPE_BASE:-10000.0}"
 SIGLIP_ROPE_DIM="${SIGLIP_ROPE_DIM:-none}"
 
-# Stage 4 继续训练已有 LoRA，学习率比 Stage 3 再保守一些。
+# Stage 4 继续训练已有 LoRA。
 LR="${LR:-5e-5}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-0.0}"
 MAX_GRAD_NORM="${MAX_GRAD_NORM:-1.0}"

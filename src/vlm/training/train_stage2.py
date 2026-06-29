@@ -1,25 +1,8 @@
-"""Stage 2：多模态指令微调训练脚本。
+"""Stage 2 multimodal instruction tuning.
 
-Stage 1 做的是视觉-语言对齐：
-
-    image -> caption
-
-Stage 2 要训练模型按用户问题回答：
-
-    image + question -> answer
-
-当前第一版支持两种训练策略：
-
-    1. projector-only:
-        冻结 SigLIP2 和 Qwen3，只继续训练 projector。
-        这适合先做 sanity run，确认数据、label mask、checkpoint 都没问题。
-
-    2. projector + Qwen LoRA:
-        冻结 SigLIP2，给 Qwen3 加 LoRA，同时训练 projector。
-        这是后续正式 Stage 2 更推荐的做法。
-
-注意：
-    当前环境还没有安装 peft，所以默认 ``use_lora=False``。
+Supported strategies:
+    1. projector-only
+    2. projector + Qwen LoRA
 """
 
 from __future__ import annotations
@@ -339,7 +322,7 @@ def apply_lora(model: QwenSiglipVLM, config: Stage2TrainConfig) -> None:
     except ImportError as exc:
         raise ImportError(
             "你开启了 --use-lora，但当前环境没有安装 peft。"
-            "可以先安装 peft，或先去掉 --use-lora 跑 projector-only sanity。"
+            "可以先安装 peft，或去掉 --use-lora 跑 projector-only debug run。"
         ) from exc
 
     target_modules = [

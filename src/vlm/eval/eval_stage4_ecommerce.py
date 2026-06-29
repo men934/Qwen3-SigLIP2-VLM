@@ -1,17 +1,4 @@
-"""Stage 4 电商垂域定量评估脚本。
-
-这个脚本用于回答一个非常具体的问题：
-
-    Stage 4 在 ABO 商品图数据上做了 SFT 以后，相比 Stage 3 通用垂域模型，
-    是否真的更会回答电商商品相关问题？
-
-评估数据：
-    /root/autodl-tmp/hf_datasets/stage4_ecommerce/stage4_abo/sft/test.json
-
-默认比较：
-    1. stage2_fixed_150k_r32
-    2. stage3_doc_ocr_mix/step_006000
-    3. stage4_abo_sft_5k/best
+"""Stage 4 e-commerce quantitative evaluation.
 
 指标说明：
     - normalized exact match:
@@ -21,10 +8,7 @@
     - token F1:
         按 token overlap 算 F1。适合标题生成、属性摘要这类“没有唯一标准表述”的任务。
 
-注意：
-    生成式评估很慢，默认只抽 300 条样本做快速对比。要跑完整测试集可以传：
-
-        --max-samples none
+Use ``--max-samples none`` to evaluate the full test split.
 """
 
 from __future__ import annotations
@@ -116,7 +100,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def default_checkpoint_specs() -> dict[str, CheckpointSpec]:
-    """返回当前项目里常用的电商评估 checkpoint。"""
+    """Return registered e-commerce evaluation checkpoints."""
 
     return {
         "stage1": CheckpointSpec(
@@ -217,7 +201,7 @@ def score_prediction(prediction: str, sample: dict[str, Any]) -> dict[str, float
     """按电商任务类型计算指标。
 
     对短答案任务，EM 是最重要指标；对标题/摘要任务，F1 更有参考价值。
-    这里仍统一输出两个指标，方便表格和图表直接对比。
+    这里仍统一输出两个指标，便于表格和图表直接对比。
     """
 
     references = sample.get("answers") or [sample["messages"][-1]["content"]]
@@ -321,7 +305,7 @@ def evaluate_checkpoint(
 
 
 def write_report(path: Path, all_metrics: list[dict[str, Any]]) -> None:
-    """写 Markdown 汇总报告，方便直接看结果。"""
+    """Write a Markdown summary report."""
 
     lines = ["# Stage 4 E-commerce Evaluation", ""]
     lines.append("## Overall")
