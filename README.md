@@ -1,19 +1,19 @@
 # Qwen3-SigLIP2-VLM
 
-一个从零搭建的轻量级多模态大模型训练项目：以 **Qwen3-1.7B** 作为语言模型、**SigLIP2 SO400M** 作为视觉编码器，通过 Patch Merger + MLP Projector 完成视觉 token 到语言空间的对齐，并完整实现了从 Stage1 视觉语言对齐、Stage2 通用指令微调、Stage3 文档/OCR/图表垂域微调，到 Stage4 电商垂域 SFT + GRPO 的训练与评估流程。
+这个仓库实现了一套基于 **Qwen3-1.7B** 和 **SigLIP2 SO400M** 的 VLM 训练流程。模型侧使用 Patch Merger + MLP Projector 将视觉 token 映射到 Qwen 的语言空间；训练侧覆盖 Stage1 视觉语言对齐、Stage2 通用指令微调、Stage3 文档/OCR/图表垂域微调，以及 Stage4 电商垂域 SFT + GRPO。
 
-这个项目的目标不是直接复刻一个大规模商业 VLM，而是把一个 VLM 从数据、模型、训练脚本、评估脚本到 GRPO ablation 的核心链路跑通。代码尽量保持脚本化、模块化和中文注释，适合学习、复现实验和作为多模态方向的工程项目展示。
+我主要关注两件事：一是把 VLM 的数据处理、视觉 token 插入、LoRA 训练、评估脚本串起来；二是在一个可控的电商任务上尝试 SFT 之后的规则奖励优化，观察 GRPO 在短答案和生成类任务上的实际表现。
 
 ![Qwen3-SigLIP2-VLM project overview](docs/assets/project_hero.png)
 
-## Highlights
+## 主要实现
 
-- **Qwen3-1.7B + SigLIP2 SO400M 架构**：使用独立视觉编码器、2x2 Patch Merger 和两层 MLP Projector 拼接视觉/文本 token。
-- **动态分辨率图像处理**：支持按图像长宽比选择 patch-aligned 分辨率，并在 batch 内 padding。
-- **SigLIP2 内部 2D RoPE 实验**：将 2D visual RoPE 加到 SigLIP attention 的 Q/K 上，而不是简单在 projector 后拼位置编码。
-- **四阶段训练流程**：Stage1 对齐、Stage2 instruction tuning、Stage3 文档/OCR/ChartQA 混合垂域、Stage4 ABO 电商垂域。
-- **LoRA + GRPO 实验闭环**：实现在线 GRPO，包括 G 个回复采样、组内 advantage 标准化、KL penalty、early stopping 和任务自适应 reward。
-- **可复现实验报告**：训练脚本会输出 metrics.csv 和 loss/reward 曲线；评估脚本会输出 markdown 报告和可视化图。
+- **Qwen3-1.7B + SigLIP2 SO400M**：独立视觉编码器，2x2 Patch Merger，两层 MLP Projector，最后将视觉 token 和文本 token 一起送入 Qwen。
+- **动态分辨率图像处理**：按图像长宽比选择 patch-aligned 分辨率，在 batch 内做 padding。
+- **SigLIP2 内部 2D RoPE**：把 2D visual RoPE 加到 SigLIP attention 的 Q/K 上，用来对比固定分辨率分支。
+- **四阶段训练**：Stage1 对齐、Stage2 instruction tuning、Stage3 文档/OCR/ChartQA 混合垂域、Stage4 ABO 电商垂域。
+- **LoRA + GRPO**：在线采样 G 个回复，做组内 advantage 标准化，加入 KL penalty、early stopping 和任务自适应 reward。
+- **训练与评估记录**：训练脚本保存 `metrics.csv` 和 loss/reward 曲线；评估脚本保存 Markdown 结果和指标图，方便回看不同 checkpoint 的变化。
 
 ## Model Design
 
@@ -48,13 +48,13 @@ visual tokens + text tokens
 
 ## Training Pipeline
 
-下图概括了本项目从输入数据、模型结构、四阶段训练到最终评估结论的完整流程：
+下图是当前仓库里的训练流程和评估产物：
 
 ![Qwen3-SigLIP2-VLM multi-stage training pipeline](docs/assets/training_pipeline_overview.png)
 
 ### Stage 1: Visual-Language Alignment
 
-目标是先让 projector 学会把视觉 token 对齐到 Qwen 的语言空间。训练时冻结大部分 backbone，主要训练 Patch Merger / Projector，并在后续实验中尝试解冻 SigLIP 最后几层。
+先训练 Patch Merger / Projector，让视觉 token 能接到 Qwen 的语言空间。默认冻结大部分 backbone，后续实验里再尝试解冻 SigLIP 最后几层。
 
 数据：
 
@@ -69,7 +69,7 @@ bash scripts/train_stage1.sh
 
 ### Stage 2: General Multimodal Instruction Tuning
 
-目标是让模型学会多轮/单轮视觉问答格式，并通过 LoRA 调整 Qwen 语言模型。
+在 Stage1 的基础上加入通用视觉指令数据，通过 LoRA 调整 Qwen 的回答格式和多模态问答能力。
 
 数据：
 
@@ -85,7 +85,7 @@ bash scripts/train_stage2.sh
 
 ### Stage 3: Document / OCR / Chart Domain SFT
 
-目标是增强文档理解、OCR、图表问答能力。这个阶段从 Stage2 LoRA checkpoint 初始化。
+从 Stage2 LoRA checkpoint 初始化，继续训练文档理解、OCR 和图表问答数据。
 
 数据混合：
 
@@ -101,7 +101,7 @@ bash scripts/train_stage2.sh
 bash scripts/train_stage3.sh
 ```
 
-Stage3 在 300 样本快速评估上的提升非常明显：
+在 300 样本快速评估上，Stage3 相比前两阶段有明显提升：
 
 | Checkpoint | EM | F1 | Chart Relaxed |
 |---|---:|---:|---:|
@@ -132,19 +132,19 @@ Stage4 使用 Amazon Berkeley Objects 相关数据构造电商商品图问答任
 bash scripts/train_stage4_sft.sh
 ```
 
-100k balanced SFT 的验证 loss 稳定下降：
+100k balanced SFT 的验证 loss 下降如下：
 
 ![Stage4 SFT loss](docs/assets/stage4_sft_loss_curve.png)
 
 ## GRPO Experiments
 
-本项目实现了一个面向电商垂域的在线 GRPO 训练脚本：
+Stage4 SFT 之后，我写了一个面向电商垂域的在线 GRPO 训练脚本：
 
 ```bash
 bash scripts/train_stage4_grpo.sh
 ```
 
-核心流程：
+实现方式：
 
 ```text
 1. 对每个 prompt 采样 G 个回复
@@ -156,7 +156,7 @@ bash scripts/train_stage4_grpo.sh
 6. 使用 clipped surrogate + KL penalty 更新 LoRA
 ```
 
-我们做了三组 GRPO ablation：
+README 中保留了三组 GRPO 对比：
 
 | Run | Main Setting | Observation |
 |---|---|---|
@@ -211,10 +211,10 @@ Stage4 电商 300 样本评估结果：
 
 ![Stage4 by-task F1](docs/assets/stage4_by_task_f1.png)
 
-结论：
+目前结论：
 
 - 如果追求整体稳定性，Stage4 SFT 100k balanced 仍是最稳 checkpoint。
-- 如果展示 GRPO 的有效性，short reward v2 是最有说服力的版本：它避免了 20k 长跑的退化，并将整体 F1 从 0.6593 提升到 0.6609，同时 generation F1 从 0.5422 提升到 0.5528。
+- GRPO short reward v2 避免了 20k 长跑里的退化，整体 F1 从 0.6593 到 0.6609，generation F1 从 0.5422 到 0.5528。
 - GRPO 仍然需要更细的 reward engineering，尤其是 `product_style_qa` 和 `product_title_generation`。
 
 ## Repository Structure
@@ -286,7 +286,7 @@ bash scripts/train_stage1.sh
 
 ## 数据说明
 
-仓库不包含数据集和模型权重，只保留代码、README 和实验图表。本文实验使用的数据如下：
+本文实验使用的数据如下：
 
 | 阶段 | 数据 |
 |---|---|
@@ -337,10 +337,9 @@ PYTHONPATH=src python -m vlm.eval.eval_stage4_ecommerce \
   --max-new-tokens 64
 ```
 
-## 说明与局限
+## 备注
 
-- 这是一个偏学习和工程复现导向的 VLM 项目。代码更重视链路清晰、注释完整和实验可复现，而不是极致训练效率。
+- 当前代码以单机实验脚本为主，没有接入 DeepSpeed/FSDP。
 - 当前 GRPO 实现是在线单次更新版本。代码中用 `current_logps.detach()` 作为当前采样组的 old-policy 快照，因此它更接近 online GRPO，而不是多轮 replay 的 PPO。
 - 动态分辨率 + SigLIP2 Q/K 2D RoPE 是一个有价值的架构实验，但在当前实验中并没有稳定超过固定分辨率分支。
 - Stage4 GRPO short reward v2 提升了整体 F1、generation F1、属性总结和颜色问答，但 `product_style_qa` 和 `product_title_generation` 仍然受 reward 设计影响较大。
-- 模型权重、原始数据集和 checkpoint 不放在 GitHub 中，避免仓库过大；相关路径通过环境变量传入。
