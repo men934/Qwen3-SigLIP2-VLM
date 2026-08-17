@@ -140,6 +140,16 @@ Stage4 SFT 之后，仓库实现了一个电商垂域的在线 GRPO-style 训练
 bash scripts/train_stage4_grpo.sh
 ```
 
+clean-label 版本先从 SFT split 过滤噪声标签并补充别名，再运行同一个训练入口：
+
+```bash
+bash scripts/build_stage4_grpo_clean.sh
+set -a
+source configs/stage4_grpo_visual_v3.env
+set +a
+bash scripts/train_stage4_grpo.sh
+```
+
 训练流程：
 
 ```text
@@ -154,12 +164,13 @@ bash scripts/train_stage4_grpo.sh
 
 实现边界：
 
-- 这是 **online single-update GRPO-style trainer**，不是完整 PPO/GRPO replay trainer。
+- 这是项目内实现的 **online single-update GRPO-style trainer**，不是 ms-swift、LLaMA-Factory、TRL 或完整 PPO/GRPO replay trainer。
+- rollout 使用当前 VLM 的 HuggingFace `generate` 路径，没有接入 vLLM 加速。
 - 每组回复只更新一次；`old_logps` 使用 `current_logps.detach()` 作为采样时 policy 的快照。
 - loss 使用 sequence-level average logprob，不是逐 token 的多轮 RLHF objective。
 - 默认 `prompt_batch_size=1`，每个 optimizer step 处理一个 prompt 和 `NUM_GENERATIONS` 个回复。
 - 默认只训练 Qwen LoRA，冻结 SigLIP2、Qwen backbone 和 projector。
-- reward 是任务规则函数，适合 brand/type/color/style 等短答案任务，以及 title/summary 的 token F1 shaping。
+- reward 是任务规则函数。`legacy` 保留 short v2 逻辑；`visual_v3` 增加了标签过滤、规范化别名、短答案 exact/contains/F1 shaping 和 title/summary token F1。
 
 GRPO 对比实验：
 
@@ -168,27 +179,29 @@ GRPO 对比实验：
 | GRPO 300-step | short-answer reward | generation F1 提升，但整体 EM/F1 下降 |
 | GRPO 20k | long run, `NUM_GENERATIONS=4` | validation reward 变高，但真实评估整体退化，出现 reward hacking |
 | GRPO short reward v2 | short run + stronger KL + early stopping + task-adaptive reward | 整体 F1 小幅超过 SFT，generation F1 高于 SFT |
+| GRPO visual v3 | clean labels + canonical alias reward + `NUM_GENERATIONS=6` + stronger KL | 300 样本评估中 EM/F1/Short EM/Generation F1 均超过 SFT 和 short v2 |
 
-GRPO short reward v2 使用：
+GRPO visual v3 使用：
 
-- `KL_BETA=0.05`
-- `LR=5e-6`
-- `MAX_STEPS=3000`
-- `NUM_GENERATIONS=4`
-- early stopping
-- title/summary 使用 token F1 主 reward
-- style/title/summary 任务重采样
+- `REWARD_PROFILE=visual_v3`
+- `KL_BETA=0.08`
+- `LR=3e-6`
+- `MAX_STEPS=4000`
+- `NUM_GENERATIONS=6`
+- 只训练 Qwen LoRA，projector 冻结
+- brand/type/color/style 使用规范化 exact + contains/F1 shaping
+- title/summary 使用 token F1 主 reward，并对过长输出加长度惩罚
 
-训练在 step 2500 early stopped，best 出现在 step 1500：
+训练 best 出现在 step 4000：
 
 | Step | Val Reward |
 |---:|---:|
-| 250 | 0.7080 |
-| 500 | 0.7174 |
-| 1500 | **0.7196** |
-| 2500 | 0.6988 |
+| 500 | 0.7238 |
+| 2000 | 0.7293 |
+| 3000 | 0.7396 |
+| 4000 | **0.7431** |
 
-![Stage4 GRPO metrics](docs/assets/stage4_grpo_short_v2_metrics.png)
+![Stage4 GRPO visual v3 metrics](docs/assets/stage4_grpo_visual_v3_metrics.png)
 
 ## Evaluation
 
@@ -196,31 +209,32 @@ Stage4 电商 300 样本评估结果：
 
 | Checkpoint | EM | F1 | Short EM | Generation F1 |
 |---|---:|---:|---:|---:|
-| Stage4 SFT 100k balanced | **0.5000** | 0.6593 | **0.6931** | 0.5422 |
-| GRPO 300-step | 0.4867 | 0.6498 | 0.6683 | **0.5589** |
+| Stage4 SFT 100k balanced | 0.5000 | 0.6593 | 0.6931 | 0.5422 |
+| GRPO 300-step | 0.4867 | 0.6498 | 0.6683 | 0.5589 |
 | GRPO 20k | 0.4767 | 0.6409 | 0.6683 | 0.5358 |
-| GRPO short reward v2 | 0.4933 | **0.6609** | 0.6881 | 0.5528 |
+| GRPO short reward v2 | 0.4933 | 0.6609 | 0.6881 | 0.5528 |
+| GRPO visual v3 | **0.5067** | **0.6789** | **0.7030** | **0.5783** |
 
-![Stage4 overall metrics](docs/assets/stage4_overall_metrics.png)
+![Stage4 overall metrics](docs/assets/stage4_visual_v3_overall_metrics.png)
 
 按任务 F1：
 
-| Task | SFT100k F1 | GRPO short v2 F1 | Change |
-|---|---:|---:|---:|
-| attribute summary | 0.4943 | **0.5216** | +0.0273 |
-| brand QA | **0.8256** | **0.8256** | +0.0000 |
-| color QA | 0.6091 | **0.6352** | +0.0261 |
-| style QA | **0.3800** | 0.3400 | -0.0400 |
-| title generation | **0.5830** | 0.5792 | -0.0038 |
-| type QA | **0.8421** | 0.8246 | -0.0175 |
+| Task | SFT100k F1 | GRPO short v2 F1 | GRPO visual v3 F1 | vs SFT |
+|---|---:|---:|---:|---:|
+| attribute summary | 0.4943 | 0.5216 | **0.5435** | +0.0493 |
+| brand QA | **0.8256** | **0.8256** | **0.8256** | +0.0000 |
+| color QA | 0.6091 | 0.6352 | **0.6455** | +0.0364 |
+| style QA | 0.3800 | 0.3400 | **0.3933** | +0.0133 |
+| title generation | 0.5830 | 0.5792 | **0.6078** | +0.0248 |
+| type QA | **0.8421** | 0.8246 | **0.8421** | +0.0000 |
 
-![Stage4 by-task F1](docs/assets/stage4_by_task_f1.png)
+![Stage4 by-task F1](docs/assets/stage4_visual_v3_by_task_f1.png)
 
 结论：
 
-- Stage4 SFT 100k balanced 是整体最稳的 checkpoint。
-- GRPO short reward v2 将整体 F1 从 0.6593 提升到 0.6609，generation F1 从 0.5422 提升到 0.5528。
-- `product_style_qa` 和 `product_title_generation` 仍受 reward 设计影响较大。
+- GRPO visual v3 将整体 F1 从 0.6593 提升到 0.6789，generation F1 从 0.5422 提升到 0.5783。
+- 短答案 EM 从 0.6931 提升到 0.7030；主要增益来自 color/style 的标签规范化和 reward shaping。
+- brand/type 已接近当前 300 样本评估上限，本轮主要没有牺牲这两类任务。
 
 ## Repository Structure
 
@@ -231,13 +245,16 @@ qwen3_siglip2_vlm/
 │   ├── stage2_lora_150k.env
 │   ├── stage3_doc_ocr_mix.env
 │   ├── stage4_sft_100k_balanced.env
-│   └── stage4_grpo_short_v2.env
+│   ├── stage4_grpo_short_v2.env
+│   └── stage4_grpo_visual_v3.env
 ├── scripts/
+│   ├── build_stage4_grpo_clean.sh
 │   ├── train_stage1.sh
 │   ├── train_stage2.sh
 │   ├── train_stage3.sh
 │   ├── train_stage4_sft.sh
-│   └── train_stage4_grpo.sh
+│   ├── train_stage4_grpo.sh
+│   └── train_stage4_grpo_v3.sh
 ├── src/vlm/
 │   ├── data/
 │   ├── models/
@@ -321,7 +338,7 @@ Stage4 电商垂域评估：
 ```bash
 PYTHONPATH=src python -m vlm.eval.eval_stage4_ecommerce \
   --max-samples 300 \
-  --checkpoints stage4_100k_balanced,stage4_grpo_short_v2 \
+  --checkpoints stage4_100k_balanced,stage4_grpo_short_v2,stage4_grpo_visual_v3 \
   --output-dir outputs/stage4_eval_300 \
   --max-new-tokens 64
 ```
@@ -330,4 +347,4 @@ PYTHONPATH=src python -m vlm.eval.eval_stage4_ecommerce \
 
 - 当前代码以单机实验脚本为主，没有接入 DeepSpeed/FSDP。
 - 动态分辨率 + SigLIP2 Q/K 2D RoPE 是架构实验分支；当前结果没有稳定超过固定分辨率分支。
-- Stage4 GRPO short reward v2 改善了整体 F1、generation F1、属性总结和颜色问答，但 style/title 任务仍需要更细的 reward 设计。
+- Stage4 GRPO visual v3 当前仍是项目内轻量实现；没有使用 vLLM rollout，也没有迁移到 ms-swift 或 LLaMA-Factory。

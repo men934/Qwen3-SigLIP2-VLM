@@ -29,7 +29,7 @@ import re
 import string
 import time
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from vlm.data.collator import CollatorConfig, VLMDataCollator
 from vlm.data.conversation import DEFAULT_IMAGE_TOKEN, IM_END, IM_START
+from vlm.data import ecommerce_reward
 from vlm.data.grpo_dataset import GRPODataset
 from vlm.models.vlm_model import IGNORE_INDEX, QwenSiglipVLM, VLMModelConfig
 
@@ -86,6 +87,7 @@ class Stage4GRPOConfig:
     length_penalty_weight: float = 0.02
     max_reward_tokens: int = 8
     generative_max_reward_tokens: int = 48
+    reward_profile: str = "legacy"
 
     # 按任务过采样。20k 实验显示 style/title 被 GRPO 伤害较大，所以默认提高这两类出现频率。
     # JSON string so shell environment variables can override it directly.
@@ -166,6 +168,7 @@ def parse_args() -> Stage4GRPOConfig:
         type=int,
         default=Stage4GRPOConfig.generative_max_reward_tokens,
     )
+    parser.add_argument("--reward-profile", default=Stage4GRPOConfig.reward_profile)
     parser.add_argument("--task-sampling-weights", default=Stage4GRPOConfig.task_sampling_weights)
     parser.add_argument("--early-stop-patience", type=int, default=Stage4GRPOConfig.early_stop_patience)
     parser.add_argument("--early-stop-min-delta", type=float, default=Stage4GRPOConfig.early_stop_min_delta)
@@ -213,6 +216,7 @@ def parse_args() -> Stage4GRPOConfig:
         length_penalty_weight=args.length_penalty_weight,
         max_reward_tokens=args.max_reward_tokens,
         generative_max_reward_tokens=args.generative_max_reward_tokens,
+        reward_profile=args.reward_profile,
         task_sampling_weights=args.task_sampling_weights,
         early_stop_patience=args.early_stop_patience,
         early_stop_min_delta=args.early_stop_min_delta,
@@ -230,7 +234,7 @@ def parse_args() -> Stage4GRPOConfig:
 
 
 def set_seed(seed: int) -> None:
-    """固定随机种子，降低小规模实验波动。"""
+    """Set random seeds."""
 
     random.seed(seed)
     torch.manual_seed(seed)
@@ -238,20 +242,13 @@ def set_seed(seed: int) -> None:
 
 
 def collate_identity(examples: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """GRPO trainer 自己处理 prompt/generation，这里保持原样返回样本。"""
+    """Return samples unchanged."""
 
     return examples
 
 
 def parse_task_weights(raw: str) -> dict[str, float]:
-    """解析任务采样权重。
-
-    传入格式是 JSON dict，例如：
-
-        {"product_style_qa": 2.5, "product_title_generation": 2.0}
-
-    未出现在字典里的任务权重默认为 1.0。
-    """
+    """Parse task-sampling weights from a JSON dict."""
 
     if not raw:
         return {}
@@ -268,12 +265,7 @@ def parse_task_weights(raw: str) -> dict[str, float]:
 
 
 def build_weighted_sampler(dataset: GRPODataset, config: Stage4GRPOConfig) -> WeightedRandomSampler | None:
-    """按任务构造 WeightedRandomSampler。
-
-    20k GRPO 的结果显示，长时间只按原始数据分布训练会伤害 style/title。这里使用
-    replacement=True 的 weighted sampler，让稀缺或重点任务在短程 GRPO 中更频繁出现。
-    只改变 prompt 采样频率，不改变每条样本内部的 reward。
-    """
+    """Build a weighted sampler over tasks."""
 
     task_weights = parse_task_weights(config.task_sampling_weights)
     if not task_weights:
@@ -299,7 +291,7 @@ def build_weighted_sampler(dataset: GRPODataset, config: Stage4GRPOConfig) -> We
 
 
 def build_dataloaders(config: Stage4GRPOConfig) -> tuple[DataLoader, GRPODataset | None, VLMDataCollator]:
-    """构造 GRPO 训练/验证数据和复用的 tokenizer/image processor。"""
+    """Build training and validation loaders."""
 
     train_dataset = GRPODataset(
         annotation_path=config.annotation_path,
@@ -434,29 +426,13 @@ GENERATION_TASKS = {
 }
 
 
-def reward_one(
+def legacy_reward_one(
     prediction: str,
     references: list[str],
     config: Stage4GRPOConfig,
     *,
     task: str = "",
 ) -> tuple[float, float]:
-    """计算单条回复的 reward。
-
-    这里按任务类型分两套逻辑：
-
-    1. 短答案任务：
-       brand/type/color/style 更接近分类或短抽取，normalized exact match 仍是主奖励。
-       但 style 经常是尺寸、材质、型号等短语，完全匹配过稀疏，所以额外提高 token F1
-       shaping 权重。
-
-    2. 生成任务：
-       title_generation / attribute_summary 没有唯一标准答案，exact/contains 不适合作主奖励。
-       这里用 token F1 作为主奖励，exact 只作为小 bonus，并放宽长度惩罚阈值。
-
-    reward 与最终评估指标保持一致，降低 reward hacking 风险。
-    """
-
     normalized_pred = normalize_answer(prediction)
     normalized_refs = [normalize_answer(item) for item in references]
     exact = float(any(normalized_pred == ref for ref in normalized_refs))
@@ -485,6 +461,82 @@ def reward_one(
     f1_weight = config.style_f1_reward_weight if task == "product_style_qa" else config.token_f1_reward_weight
     reward += f1_weight * f1 - length_penalty
     return reward, exact
+
+
+def visual_v3_reward_one(
+    prediction: str,
+    references: list[str],
+    config: Stage4GRPOConfig,
+    *,
+    task: str = "",
+) -> tuple[float, float]:
+    normalized_pred = ecommerce_reward.canonicalize(prediction, task)
+    normalized_refs = [ecommerce_reward.canonicalize(item, task) for item in references]
+    exact = float(any(normalized_pred and normalized_pred == ref for ref in normalized_refs))
+    contains = float(
+        any(
+            normalized_pred
+            and ref
+            and (normalized_pred in ref or ref in normalized_pred)
+            for ref in normalized_refs
+        )
+    )
+    f1 = ecommerce_reward.token_f1(prediction, references, task)
+    token_count = len(normalized_pred.split())
+
+    if task in GENERATION_TASKS:
+        length_penalty = max(0, token_count - config.generative_max_reward_tokens)
+        reward = config.generative_f1_reward_weight * f1
+        reward += config.generative_exact_bonus * exact
+        reward += 0.05 * contains
+        reward -= config.length_penalty_weight * length_penalty
+        if task == "product_attribute_summary":
+            lowered = prediction.lower()
+            field_bonus = 0.0
+            for marker in ("title", "brand", "product type", "color"):
+                if marker in lowered:
+                    field_bonus += 0.025
+            reward += min(field_bonus, 0.1)
+        return reward, exact
+
+    if token_count == 0:
+        return -0.2, 0.0
+
+    max_tokens = config.max_reward_tokens
+    if task == "product_type_qa":
+        max_tokens = 6
+    elif task == "product_brand_qa":
+        max_tokens = 8
+    elif task == "product_style_qa":
+        max_tokens = 5
+    length_penalty = max(0, token_count - max_tokens) * config.length_penalty_weight
+
+    if task == "product_type_qa":
+        reward = exact + 0.35 * (1.0 - exact) * f1 + 0.1 * contains
+    elif task == "product_color_qa":
+        reward = exact + 0.25 * (1.0 - exact) * f1 + 0.15 * contains
+    elif task == "product_brand_qa":
+        reward = exact + 0.2 * (1.0 - exact) * f1 + 0.1 * contains
+    elif task == "product_style_qa":
+        reward = exact + 0.5 * (1.0 - exact) * f1 + 0.1 * contains
+    else:
+        reward = exact + config.token_f1_reward_weight * f1 + 0.1 * contains
+
+    return reward - length_penalty, exact
+
+
+def reward_one(
+    prediction: str,
+    references: list[str],
+    config: Stage4GRPOConfig,
+    *,
+    task: str = "",
+) -> tuple[float, float]:
+    if config.reward_profile == "legacy":
+        return legacy_reward_one(prediction, references, config, task=task)
+    if config.reward_profile == "visual_v3":
+        return visual_v3_reward_one(prediction, references, config, task=task)
+    raise ValueError(f"未知 reward_profile：{config.reward_profile}")
 
 
 def trim_generated_ids(token_ids: Tensor, tokenizer) -> list[int]:
@@ -588,17 +640,7 @@ def sequence_logprobs(
     response_ids: list[list[int]],
     device: torch.device,
 ) -> Tensor:
-    """计算每个回复的平均 token logprob。
-
-    关键点：
-        VLM 里 ``<image>`` 会被展开成多个视觉 token，所以不能直接用原始 input_ids 的
-        下标去切 logits。这里复用 ``prepare_multimodal_inputs`` 的 labels 展开逻辑：
-
-        1. 原始 labels 中 prompt 位置为 IGNORE_INDEX。
-        2. response 位置填真实 token id。
-        3. ``prepare_multimodal_inputs`` 会在插入视觉 token 的同时同步扩展 labels。
-        4. 对扩展后的 labels 做 causal shift，即可准确找到 response token 的 logprob。
-    """
+    """Compute average token logprob for each response."""
 
     tokenizer = helper.tokenizer
     prompt_ids = tokenizer(
@@ -664,18 +706,7 @@ def grpo_loss(
     rewards: Tensor,
     config: Stage4GRPOConfig,
 ) -> tuple[Tensor, dict[str, float]]:
-    """计算 clipped GRPO loss。
-
-    这里显式对应用户提到的核心流程：
-
-        1. rewards 是每个 prompt 的 G 个回复奖励 R_i。
-        2. advantages = (R_i - mean(R)) / std(R)，在组内标准化。
-        3. advantages 做裁剪，降低噪声 reward 的梯度冲击。
-        4. old_logps 是采样时 policy 的 logprob 快照；本实现每组回复只更新一次，
-           所以用 current_logps.detach() 作为 old_logps。
-        5. ratio = exp(current_logps - old_logps)，构造 PPO/GRPO clipped surrogate。
-        6. KL 使用 reference model 的 logprob 估计，并加到 loss 中。
-    """
+    """Compute clipped GRPO loss with KL penalty."""
 
     reward_mean = rewards.mean()
     reward_std = rewards.std(unbiased=False)
@@ -827,21 +858,13 @@ def evaluate_reward(
     was_training = model.training
     model.eval()
     rewards = []
-    original_temperature = config.temperature
-    original_top_p = config.top_p
-    original_generations = config.num_generations
-    config.temperature = 0.0
-    config.top_p = 1.0
-    config.num_generations = 1
+    eval_config = replace(config, temperature=0.0, top_p=1.0, num_generations=1)
     for index in range(min(config.eval_samples, len(dataset))):
         sample = dataset[index]
-        _, texts, _ = generate_responses(model, helper, sample, config, device)
+        _, texts, _ = generate_responses(model, helper, sample, eval_config, device)
         refs = sample["reward"]["answers"]
         reward, _ = reward_one(texts[0], refs, config, task=sample.get("task", ""))
         rewards.append(reward)
-    config.temperature = original_temperature
-    config.top_p = original_top_p
-    config.num_generations = original_generations
     if was_training:
         model.train()
     return sum(rewards) / max(1, len(rewards))

@@ -17,3 +17,12 @@ set +a
 bash scripts/train_stage4_grpo.sh
 ```
 
+For the cleaned-label GRPO run:
+
+```bash
+bash scripts/build_stage4_grpo_clean.sh
+set -a
+source configs/stage4_grpo_visual_v3.env
+set +a
+bash scripts/train_stage4_grpo.sh
+```
