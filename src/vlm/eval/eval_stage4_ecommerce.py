@@ -92,7 +92,9 @@ def parse_args() -> argparse.Namespace:
             "逗号分隔的 checkpoint 名称。可选："
             "stage1,stage1_dynamic,stage2,stage2_dynamic,stage3,"
             "stage4_5k,stage4_100k_balanced,stage4_grpo,stage4_grpo_20k,"
-            "stage4_grpo_short_v2,stage4_grpo_visual_v3。"
+            "stage4_grpo_short_v2,stage4_grpo_visual_v3,"
+            "stage4_grpo_visual_v3_step_004000,"
+            "stage4_grpo_visual_v3_step_020000。"
             "默认先对比 Stage3 和 Stage4-5k。"
         ),
     )
@@ -163,6 +165,16 @@ def default_checkpoint_specs() -> dict[str, CheckpointSpec]:
             name="stage4_abo_grpo_visual_v3_best",
             projector_path="/root/autodl-tmp/checkpoints/stage4_abo_grpo_visual_v3/best/projector.pt",
             lora_path="/root/autodl-tmp/checkpoints/stage4_abo_grpo_visual_v3/best/lora_adapter",
+        ),
+        "stage4_grpo_visual_v3_step_004000": CheckpointSpec(
+            name="stage4_abo_grpo_visual_v3_step_004000",
+            projector_path="/root/autodl-tmp/checkpoints/stage4_abo_grpo_visual_v3/step_004000/projector.pt",
+            lora_path="/root/autodl-tmp/checkpoints/stage4_abo_grpo_visual_v3/step_004000/lora_adapter",
+        ),
+        "stage4_grpo_visual_v3_step_020000": CheckpointSpec(
+            name="stage4_abo_grpo_visual_v3_step_020000",
+            projector_path="/root/autodl-tmp/checkpoints/stage4_abo_grpo_visual_v3/step_020000/projector.pt",
+            lora_path="/root/autodl-tmp/checkpoints/stage4_abo_grpo_visual_v3/step_020000/lora_adapter",
         ),
     }
 

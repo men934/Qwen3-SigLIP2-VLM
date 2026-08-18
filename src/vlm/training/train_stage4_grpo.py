@@ -54,6 +54,7 @@ class Stage4GRPOConfig:
     val_annotation_path: str | None = "/root/autodl-tmp/hf_datasets/stage4_ecommerce/stage4_abo/grpo/val.json"
     init_projector_path: str = "/root/autodl-tmp/checkpoints/stage4_abo_sft_100k_balanced/best/projector.pt"
     init_lora_path: str = "/root/autodl-tmp/checkpoints/stage4_abo_sft_100k_balanced/best/lora_adapter"
+    resume_from_checkpoint: str | None = None
     output_dir: str = "/root/autodl-tmp/checkpoints/stage4_abo_grpo"
 
     image_size: int = 384
@@ -130,6 +131,7 @@ def parse_args() -> Stage4GRPOConfig:
     parser.add_argument("--val-annotation-path", default=Stage4GRPOConfig.val_annotation_path)
     parser.add_argument("--init-projector-path", default=Stage4GRPOConfig.init_projector_path)
     parser.add_argument("--init-lora-path", default=Stage4GRPOConfig.init_lora_path)
+    parser.add_argument("--resume-from-checkpoint", default=Stage4GRPOConfig.resume_from_checkpoint)
     parser.add_argument("--output-dir", default=Stage4GRPOConfig.output_dir)
 
     parser.add_argument("--image-size", type=int, default=Stage4GRPOConfig.image_size)
@@ -192,6 +194,7 @@ def parse_args() -> Stage4GRPOConfig:
         val_annotation_path=args.val_annotation_path,
         init_projector_path=args.init_projector_path,
         init_lora_path=args.init_lora_path,
+        resume_from_checkpoint=args.resume_from_checkpoint,
         output_dir=args.output_dir,
         image_size=args.image_size,
         max_prompt_length=args.max_prompt_length,
@@ -332,6 +335,8 @@ def build_model(
     helper: VLMDataCollator,
     *,
     trainable: bool,
+    projector_path: str | Path | None = None,
+    lora_path: str | Path | None = None,
 ) -> QwenSiglipVLM:
     """加载 Stage4 SFT 模型。
 
@@ -354,14 +359,14 @@ def build_model(
         )
     )
 
-    projector_path = Path(config.init_projector_path)
+    projector_path = Path(projector_path or config.init_projector_path)
     if not projector_path.is_file():
         raise FileNotFoundError(f"初始化 projector 不存在：{projector_path}")
     model.projector.load_state_dict(torch.load(projector_path, map_location="cpu"))
 
     from peft import PeftModel
 
-    lora_path = Path(config.init_lora_path)
+    lora_path = Path(lora_path or config.init_lora_path)
     if not lora_path.is_dir():
         raise FileNotFoundError(f"初始化 LoRA adapter 不存在：{lora_path}")
     model.language_model = PeftModel.from_pretrained(
@@ -379,6 +384,38 @@ def build_model(
             param.requires_grad = False
         model.eval()
     return model
+
+
+def checkpoint_paths(checkpoint_dir: str | Path) -> tuple[Path, Path, Path]:
+    ckpt_dir = Path(checkpoint_dir)
+    projector_path = ckpt_dir / "projector.pt"
+    lora_path = ckpt_dir / "lora_adapter"
+    trainer_state_path = ckpt_dir / "trainer_state.pt"
+    if not projector_path.is_file():
+        raise FileNotFoundError(f"resume checkpoint 缺少 projector.pt：{projector_path}")
+    if not lora_path.is_dir():
+        raise FileNotFoundError(f"resume checkpoint 缺少 lora_adapter：{lora_path}")
+    if not trainer_state_path.is_file():
+        raise FileNotFoundError(f"resume checkpoint 缺少 trainer_state.pt：{trainer_state_path}")
+    return projector_path, lora_path, trainer_state_path
+
+
+def move_optimizer_state(optimizer: torch.optim.Optimizer, device: torch.device) -> None:
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if isinstance(value, Tensor):
+                state[key] = value.to(device)
+
+
+def best_val_from_metrics(metrics_path: Path) -> float:
+    if not metrics_path.is_file():
+        return float("-inf")
+    best = float("-inf")
+    for row in csv.DictReader(metrics_path.open("r", encoding="utf-8")):
+        raw = row.get("val_reward")
+        if raw:
+            best = max(best, float(raw))
+    return best
 
 
 def build_prompt(sample: dict[str, Any], image_token: str = DEFAULT_IMAGE_TOKEN) -> str:
@@ -883,6 +920,8 @@ def train(config: Stage4GRPOConfig) -> None:
     print(f"[init] device={device}")
     print(f"[init] output_dir={output_dir}")
     print(f"[init] init_lora_path={config.init_lora_path}")
+    if config.resume_from_checkpoint:
+        print(f"[init] resume_from_checkpoint={config.resume_from_checkpoint}")
     print(f"[init] train_projector={not config.freeze_projector}")
 
     train_loader, val_dataset, helper = build_dataloaders(config)
@@ -890,7 +929,22 @@ def train(config: Stage4GRPOConfig) -> None:
     if val_dataset is not None:
         print(f"[data] val prompts={len(val_dataset)}")
 
-    policy = build_model(config, helper, trainable=True).to(device)
+    resume_state: dict[str, Any] | None = None
+    resume_projector_path: Path | None = None
+    resume_lora_path: Path | None = None
+    if config.resume_from_checkpoint:
+        resume_projector_path, resume_lora_path, resume_state_path = checkpoint_paths(
+            config.resume_from_checkpoint
+        )
+        resume_state = torch.load(resume_state_path, map_location="cpu")
+
+    policy = build_model(
+        config,
+        helper,
+        trainable=True,
+        projector_path=resume_projector_path,
+        lora_path=resume_lora_path,
+    ).to(device)
     reference = build_model(config, helper, trainable=False).to(device)
     policy.train()
     reference.eval()
@@ -905,8 +959,23 @@ def train(config: Stage4GRPOConfig) -> None:
         weight_decay=config.weight_decay,
     )
 
-    global_step = 0
-    best_val_reward = float("-inf")
+    global_step = int(resume_state.get("step", 0)) if resume_state is not None else 0
+    best_val_reward = best_val_from_metrics(metrics_path)
+    if resume_state is not None:
+        if "optimizer" in resume_state:
+            optimizer.load_state_dict(resume_state["optimizer"])
+            move_optimizer_state(optimizer, device)
+            for group in optimizer.param_groups:
+                group["lr"] = config.learning_rate
+                group["weight_decay"] = config.weight_decay
+        if resume_state.get("val_reward") is not None:
+            best_val_reward = max(best_val_reward, float(resume_state["val_reward"]))
+        print(
+            "[resume] "
+            f"global_step={global_step} "
+            f"best_val_reward={best_val_reward:.4f} "
+            f"lr={config.learning_rate}"
+        )
     bad_eval_count = 0
     start = time.time()
     running: dict[str, float] = {}

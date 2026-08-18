@@ -33,6 +33,7 @@ VAL_ANNOTATION_PATH="${VAL_ANNOTATION_PATH:-/root/autodl-tmp/hf_datasets/stage4_
 
 INIT_PROJECTOR_PATH="${INIT_PROJECTOR_PATH:-/root/autodl-tmp/checkpoints/stage4_abo_sft_100k_balanced/best/projector.pt}"
 INIT_LORA_PATH="${INIT_LORA_PATH:-/root/autodl-tmp/checkpoints/stage4_abo_sft_100k_balanced/best/lora_adapter}"
+RESUME_FROM_CHECKPOINT="${RESUME_FROM_CHECKPOINT:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-/root/autodl-tmp/checkpoints/stage4_abo_grpo_short_reward_v2}"
 
 MAX_SAMPLES="${MAX_SAMPLES:-100000}"
@@ -86,6 +87,7 @@ echo "ANNOTATION_PATH=${ANNOTATION_PATH}"
 echo "VAL_ANNOTATION_PATH=${VAL_ANNOTATION_PATH}"
 echo "INIT_PROJECTOR_PATH=${INIT_PROJECTOR_PATH}"
 echo "INIT_LORA_PATH=${INIT_LORA_PATH}"
+echo "RESUME_FROM_CHECKPOINT=${RESUME_FROM_CHECKPOINT}"
 echo "OUTPUT_DIR=${OUTPUT_DIR}"
 echo "MAX_SAMPLES=${MAX_SAMPLES}"
 echo "MAX_STEPS=${MAX_STEPS}"
@@ -106,7 +108,6 @@ CMD=(
   --annotation-path "${ANNOTATION_PATH}"
   --init-projector-path "${INIT_PROJECTOR_PATH}"
   --init-lora-path "${INIT_LORA_PATH}"
-  --output-dir "${OUTPUT_DIR}"
   --max-samples "${MAX_SAMPLES}"
   --max-steps "${MAX_STEPS}"
   --num-epochs "${NUM_EPOCHS}"
@@ -143,6 +144,12 @@ CMD=(
   --torch-dtype "${TORCH_DTYPE}"
   --device "${DEVICE}"
 )
+
+if [[ -n "${RESUME_FROM_CHECKPOINT}" ]]; then
+  CMD+=(--resume-from-checkpoint "${RESUME_FROM_CHECKPOINT}")
+fi
+
+CMD+=(--output-dir "${OUTPUT_DIR}")
 
 if [[ -n "${VAL_ANNOTATION_PATH}" ]]; then
   CMD+=(--val-annotation-path "${VAL_ANNOTATION_PATH}")

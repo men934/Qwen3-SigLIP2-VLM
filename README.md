@@ -177,29 +177,33 @@ GRPO 对比实验：
 | Run | Main Setting | Observation |
 |---|---|---|
 | GRPO 300-step | short-answer reward | generation F1 提升，但整体 EM/F1 下降 |
-| GRPO 20k | long run, `NUM_GENERATIONS=4` | validation reward 变高，但真实评估整体退化，出现 reward hacking |
+| Legacy GRPO 20k | early reward design, `NUM_GENERATIONS=4` | validation reward 变高，但真实评估整体退化，出现 reward hacking |
 | GRPO short reward v2 | short run + stronger KL + early stopping + task-adaptive reward | 整体 F1 小幅超过 SFT，generation F1 高于 SFT |
-| GRPO visual v3 | clean labels + canonical alias reward + `NUM_GENERATIONS=6` + stronger KL | 300 样本评估中 EM/F1/Short EM/Generation F1 均超过 SFT 和 short v2 |
+| GRPO visual v3 | clean labels + canonical alias reward + `NUM_GENERATIONS=6` + stronger KL | 20k 续训后，300 样本评估中 EM/F1/Short EM/Generation F1 均超过 SFT 和 short v2 |
 
 GRPO visual v3 使用：
 
 - `REWARD_PROFILE=visual_v3`
 - `KL_BETA=0.08`
 - `LR=3e-6`
-- `MAX_STEPS=4000`
+- `MAX_STEPS=20000`
 - `NUM_GENERATIONS=6`
 - 只训练 Qwen LoRA，projector 冻结
 - brand/type/color/style 使用规范化 exact + contains/F1 shaping
 - title/summary 使用 token F1 主 reward，并对过长输出加长度惩罚
+- 断点续训入口：`RESUME_FROM_CHECKPOINT=/path/to/step_xxxxxx bash scripts/train_stage4_grpo_v3.sh`
 
-训练 best 出现在 step 4000：
+训练 best 出现在 step 19500；step 20000 的验证 reward 略低，但独立评估 EM 更高：
 
 | Step | Val Reward |
 |---:|---:|
 | 500 | 0.7238 |
 | 2000 | 0.7293 |
 | 3000 | 0.7396 |
-| 4000 | **0.7431** |
+| 4000 | 0.7431 |
+| 18500 | 0.7434 |
+| 19500 | **0.7466** |
+| 20000 | 0.7455 |
 
 ![Stage4 GRPO visual v3 metrics](docs/assets/stage4_grpo_visual_v3_metrics.png)
 
@@ -211,30 +215,32 @@ Stage4 电商 300 样本评估结果：
 |---|---:|---:|---:|---:|
 | Stage4 SFT 100k balanced | 0.5000 | 0.6593 | 0.6931 | 0.5422 |
 | GRPO 300-step | 0.4867 | 0.6498 | 0.6683 | 0.5589 |
-| GRPO 20k | 0.4767 | 0.6409 | 0.6683 | 0.5358 |
+| Legacy GRPO 20k | 0.4767 | 0.6409 | 0.6683 | 0.5358 |
 | GRPO short reward v2 | 0.4933 | 0.6609 | 0.6881 | 0.5528 |
-| GRPO visual v3 | **0.5067** | **0.6789** | **0.7030** | **0.5783** |
+| GRPO visual v3 step 4000 | 0.5067 | 0.6789 | 0.7030 | 0.5783 |
+| GRPO visual v3 best, step 19500 | 0.5133 | **0.6861** | **0.7079** | **0.6019** |
+| GRPO visual v3 final, step 20000 | **0.5200** | 0.6791 | 0.7030 | 0.5941 |
 
 ![Stage4 overall metrics](docs/assets/stage4_visual_v3_overall_metrics.png)
 
 按任务 F1：
 
-| Task | SFT100k F1 | GRPO short v2 F1 | GRPO visual v3 F1 | vs SFT |
+| Task | SFT100k F1 | GRPO short v2 F1 | GRPO visual v3 best F1 | vs SFT |
 |---|---:|---:|---:|---:|
-| attribute summary | 0.4943 | 0.5216 | **0.5435** | +0.0493 |
-| brand QA | **0.8256** | **0.8256** | **0.8256** | +0.0000 |
-| color QA | 0.6091 | 0.6352 | **0.6455** | +0.0364 |
-| style QA | 0.3800 | 0.3400 | **0.3933** | +0.0133 |
-| title generation | 0.5830 | 0.5792 | **0.6078** | +0.0248 |
-| type QA | **0.8421** | 0.8246 | **0.8421** | +0.0000 |
+| attribute summary | 0.4943 | 0.5216 | **0.5740** | +0.0797 |
+| brand QA | **0.8256** | **0.8256** | 0.8205 | -0.0051 |
+| color QA | 0.6091 | **0.6352** | 0.6273 | +0.0182 |
+| style QA | 0.3800 | 0.3400 | **0.4000** | +0.0200 |
+| title generation | 0.5830 | 0.5792 | **0.6257** | +0.0427 |
+| type QA | 0.8421 | 0.8246 | **0.8596** | +0.0175 |
 
 ![Stage4 by-task F1](docs/assets/stage4_visual_v3_by_task_f1.png)
 
 结论：
 
-- GRPO visual v3 将整体 F1 从 0.6593 提升到 0.6789，generation F1 从 0.5422 提升到 0.5783。
-- 短答案 EM 从 0.6931 提升到 0.7030；主要增益来自 color/style 的标签规范化和 reward shaping。
-- brand/type 已接近当前 300 样本评估上限，本轮主要没有牺牲这两类任务。
+- GRPO visual v3 best 将整体 F1 从 0.6593 提升到 0.6861，generation F1 从 0.5422 提升到 0.6019。
+- step 20000 的 EM 最高，为 0.5200；step 19500 的整体 F1 和 generation F1 更稳，因此保留为 `best/`。
+- 主要增益来自 attribute summary、title generation、style QA 和 type QA；brand/color 基本持平或小幅回落。
 
 ## Repository Structure
 
